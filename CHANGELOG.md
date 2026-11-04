@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- README: upgrading from a release starts by quitting and removing the old
+  copy. Unpacking over it merged the two versions' files, which breaks the
+  code signature, and the running old copy kept handling links.
+
 ## [0.2.2] - 2026-11-04
 
 ### Added

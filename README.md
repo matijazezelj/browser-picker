@@ -87,11 +87,12 @@ GitHub Actions) with its SHA-256. On Intel, build from source.
    ditto -x -k Browser-Picker-*-arm64.zip ~/Applications
    ```
 
-3. **Clear the quarantine flag** -- only for an ad-hoc release. The release
-   notes say how each release was signed. A release that is **ad-hoc signed
-   and not notarized** (the current ones: no Apple developer identity is
-   behind them) is refused by macOS when downloaded with a browser, because
-   it is quarantined:
+3. **Clear the quarantine flag** -- only for an ad-hoc release downloaded
+   with a browser. The release notes say how each release was signed. A
+   release that is **ad-hoc signed and not notarized** (the current ones: no
+   Apple developer identity is behind them) is refused by macOS when a
+   browser downloaded it, because browsers mark downloads as quarantined.
+   `gh release download` and `curl` do not, so this step does nothing then:
 
    ```sh
    xattr -dr com.apple.quarantine ~/Applications/"Browser Picker.app"
@@ -114,10 +115,21 @@ GitHub Actions) with its SHA-256. On Intel, build from source.
 5. **Grant Accessibility** when asked, the first time you pick a Safari
    profile that has no window open yet (see [Permissions](#permissions)).
 
-**Upgrading** is steps 1-3 again; the config is kept. An ad-hoc release is
-signed afresh each time, so after upgrading to one, switch Browser Picker back
-on under Accessibility (see [Rebuilding drops the grants](#rebuilding-drops-the-grants)).
-A notarized release keeps the same signature, and the grants carry over.
+**Upgrading:** quit the running copy and remove it first, then repeat steps
+1-3; the config is kept. Unpacking over an existing app merges the two
+versions' files and breaks the code signature ("a sealed resource is missing
+or invalid"), and the app stays running between links, so the old version
+would keep handling them until it is restarted.
+
+```sh
+pkill -f "Browser Picker.app/Contents/MacOS/BrowserPicker"
+rm -rf ~/Applications/"Browser Picker.app"
+```
+
+An ad-hoc release is signed afresh each time, so after upgrading to one,
+switch Browser Picker back on under Accessibility (see
+[Rebuilding drops the grants](#rebuilding-drops-the-grants)). A notarized
+release keeps the same signature, and the grants carry over.
 
 ### From source
 
