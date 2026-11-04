@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Browser Picker
+Comment=Choose the browser and profile each link opens in
+Exec=@EXEC@ --open %u
+Icon=web-browser
+Terminal=false
+NoDisplay=true
+StartupNotify=false
+Categories=Network;WebBrowser;
+MimeType=x-scheme-handler/http;x-scheme-handler/https;

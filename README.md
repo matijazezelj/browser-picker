@@ -204,6 +204,191 @@ default browser in System Settings afterwards; macOS falls back to Safari if
 you do not. To also forget the remembered last pick and the cached Safari
 profile names: `defaults delete local.browser-picker`.
 
+## Linux
+
+On Linux, Browser Picker is one binary, `browser-picker`, and a desktop file
+that registers it as the handler for `http` and `https` links. Each link
+starts it once (`browser-picker --open <link>`; there is no daemon): a rule
+sends the link straight to its browser or profile, anything else gets a menu
+from a dmenu-style program. The config is the same file as on macOS.
+
+Requirements: a Linux desktop that follows the freedesktop.org specs (GNOME,
+KDE Plasma, sway, Hyprland, niri, ...), `xdg-utils` for `--set-default`, one of
+the [menu programs](#the-linux-menu), and optionally `notify-send` (libnotify)
+for notifications. The release binaries are statically linked against the
+Swift runtime and need only the C library (glibc): x86_64 and aarch64.
+
+### Install on Linux from a release
+
+```sh
+cd ~/Downloads
+gh release download --repo matijazezelj/browser-picker --pattern 'browser-picker-*-linux-*'
+arch=$(uname -m)                              # x86_64 or aarch64
+sha256sum -c browser-picker-*-linux-$arch.tar.gz.sha256
+tar -xzf browser-picker-*-linux-$arch.tar.gz
+cd browser-picker-*-linux-$arch
+make -f Makefile.linux install                # ~/.local/bin and ~/.local/share/applications
+~/.local/bin/browser-picker --set-default
+~/.local/bin/browser-picker --init-config
+~/.local/bin/browser-picker --list
+```
+
+Without `make`, the same by hand: copy `browser-picker` to a directory in
+your `PATH` (such as `~/.local/bin`) and run `browser-picker --set-default`.
+That writes `~/.local/share/applications/browser-picker.desktop` with the
+binary's own path in it, then makes it the default browser.
+
+**Upgrading:** repeat the steps; nothing keeps running between links, so the
+next link uses the new binary. `make install PREFIX=/usr/local` (as root)
+installs for every user instead.
+
+### Install on Linux from source
+
+Needs a Swift 6 toolchain (CI uses 6.4.2; [swift.org/install](https://www.swift.org/install/linux/))
+and `make`.
+
+```sh
+git clone https://github.com/matijazezelj/browser-picker.git
+cd browser-picker
+make && make test
+make install                 # PREFIX=~/.local by default
+make set-default             # browser-picker --set-default
+browser-picker --init-config
+```
+
+`make uninstall` removes the binary and the desktop file (your config is
+left alone); pick another default browser afterwards, e.g.
+`xdg-settings set default-web-browser firefox.desktop`.
+
+### Becoming the default browser
+
+`--set-default` installs `browser-picker.desktop` into
+`$XDG_DATA_HOME/applications` (`~/.local/share/applications`) unless a
+desktop file with that ID already runs this binary, then runs
+`xdg-settings set default-web-browser browser-picker.desktop`. If that fails
+it falls back to `xdg-mime default browser-picker.desktop
+x-scheme-handler/http x-scheme-handler/https`, which writes `mimeapps.list`.
+Check with `xdg-settings get default-web-browser` or
+`xdg-mime query default x-scheme-handler/https`. The desktop file is
+`NoDisplay`, so it does not show up in application menus.
+
+### The Linux menu
+
+Wayland gives an application no global pointer position, so there is **no
+menu under the cursor on Linux**: the menu program places itself, as its own
+config says, and `position` is ignored. Browser Picker runs the menu program
+directly (never through a shell), writes the targets to its stdin, one per
+line, and reads the chosen line back. A non-zero exit (Escape), no output,
+or typed text that is not exactly one of the entries cancels: the link is
+not opened.
+
+With no `[picker] command`, the first of these found in `PATH` is used:
+
+| Program | Session | Command line | Preselects the last pick |
+|---|---|---|---|
+| fuzzel | Wayland | `fuzzel --dmenu --prompt=… --lines=N` | yes (`--select-index`) |
+| wofi | Wayland | `wofi --dmenu --insensitive --prompt=… --cache-file=/dev/null` | no |
+| rofi | Wayland, X11 | `rofi -dmenu -i -no-custom -p … -l N` | yes (`-selected-row`) |
+| bemenu | Wayland, X11 | `bemenu -i -p … -l N` | yes (`--index`) |
+| tofi | Wayland | `tofi --prompt-text=… --require-match=true` | no |
+| dmenu | X11 | `dmenu -i -p … -l N` | no |
+
+On Wayland (`WAYLAND_DISPLAY` set) the order is fuzzel, wofi, rofi, bemenu,
+tofi; on X11 it is rofi, bemenu, dmenu. The prompt is
+`Open <host> in`: the host is the only part of the link the menu sees. To use
+another program, or other options, give its full argv:
+
+```toml
+[picker]
+command = ["fuzzel", "--dmenu", "--width=40", "--prompt=Browser: "]
+```
+
+Any program that speaks the dmenu protocol works. A command you give gets no
+preselect arguments. If no menu program can be started, the link opens in
+the `fallback` target (else the first browser) and a notification says why;
+a broken menu costs the choice, never the link.
+
+### Browsers and profiles on Linux
+
+A browser is any desktop entry whose `MimeType` includes
+`x-scheme-handler/https`, found the way the Desktop Entry spec says:
+`$XDG_DATA_HOME/applications`, then each `$XDG_DATA_DIRS/applications`
+(default `/usr/local/share:/usr/share`), plus the Flatpak exports
+(`~/.local/share/flatpak/exports/share/applications`,
+`/var/lib/flatpak/exports/share/applications`) and Snap's
+(`/var/lib/snapd/desktop/applications`) when the session did not add them.
+The first file with a given desktop file ID wins; `Hidden=true` hides that
+ID, and entries with `NoDisplay=true`, a `TryExec` that is not installed, or
+an Exec line that does not parse are skipped. In config references, a
+browser is its `Name` (unlocalised) or its desktop file ID
+(`"brave-browser.desktop:Work"`). When two entries have the same name (a
+distribution Firefox and a Flathub one), the later gets `(Flatpak)`,
+`(Snap)` or its ID added; `--list` shows the result.
+
+The family, and so where the profiles are, comes from the Flatpak app ID,
+the desktop file ID, the snap name or the program's name:
+
+| Family | Browsers | Profiles read from |
+|---|---|---|
+| Chromium | Chrome (and Beta, Dev, Canary), Chromium, Brave, Brave Origin, Edge, Vivaldi | `Local State` in `~/.config/google-chrome`, `google-chrome-beta`, `google-chrome-unstable`, `google-chrome-canary`, `chromium`, `BraveSoftware/Brave-Browser`, `BraveSoftware/Brave-Origin` (`Brave-Origin-Beta`), `microsoft-edge`, `vivaldi`; `$XDG_CONFIG_HOME` (and for Chrome and Chromium `$CHROME_CONFIG_HOME`) replaces `~/.config` |
+| Firefox | Firefox (ESR, Developer Edition, Nightly), LibreWolf, Zen, Floorp, Waterfox, any Gecko browser with an `application.ini` | `profiles.ini` in `~/.mozilla/firefox`, else `~/.config/mozilla/firefox` (Firefox 147+); `~/.librewolf` / `~/.config/librewolf/librewolf`; `~/.zen` / `~/.config/zen`; `~/.floorp`; `~/.waterfox`; for others `~/.<vendor>/<name>` from `application.ini` |
+| Plain | Opera and everything else | none: one entry |
+
+A Flatpak keeps its data in its own directory: `~/.var/app/<app-id>/config/<dir>`
+for Chromium browsers (for example
+`~/.var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser`) and
+`~/.var/app/<app-id>/.mozilla/firefox` and the like for Firefox ones; a snap
+under `~/snap/<name>/common/`. Those are searched for Flatpak and Snap
+entries instead of the paths above.
+
+Opening a target runs the desktop entry's own `Exec` line, split into
+arguments per the spec (quoting and escapes undone, `%i`, `%c`, `%k`
+expanded, deprecated field codes dropped), with the profile or private
+switches (`--profile-directory=…`, `--incognito`, Edge's `--inprivate`,
+`-P <name> -new-tab`, `-private-window`) inserted before the link, and the
+link itself as one argument in place of `%u` / `%U`. A Flatpak entry stays
+`flatpak run … <app-id> <switches> @@u <link> @@`. An Exec line that puts
+the link inside a larger argument (`--app=%u`), has more than one link
+field code, or does not parse is refused rather than guessed at. The browser
+is started with `posix_spawn` in a session of its own (`setsid`), with
+stdin and output on `/dev/null`, so it outlives Browser Picker, which exits
+straight away.
+
+### Linux privacy notes
+
+Everything in [Privacy](#privacy) holds, with these Linux specifics:
+
+- **What it stores**: the title of the last pick (never a private window), in
+  `$XDG_STATE_HOME/browser-picker/last-pick` (`~/.local/state/...`). No links.
+- **Process arguments**: the link is on the browser's command line, as on
+  macOS. The menu program's command line holds the host (in its prompt);
+  `notify-send`'s holds the notification text, which names the host only,
+  never the path or query. Both are visible to `ps` for the moment they run.
+- **Notifications** go through `notify-send` when it is installed, and are
+  skipped when it is not.
+
+### What to test on a real Linux machine
+
+The Linux front end is built and unit-tested in CI, but CI has no desktop.
+Reports welcome on:
+
+1. `make install && make set-default`, then
+   `xdg-settings get default-web-browser` says `browser-picker.desktop`, and
+   your desktop's default-applications settings show Browser Picker.
+2. A link from another app (a terminal's `xdg-open https://example.com`, a
+   chat client) shows the menu with every browser and profile in `--list`,
+   with the last pick preselected (fuzzel, rofi, bemenu).
+3. Escape in the menu opens nothing; picking each kind of entry opens the
+   right thing: a Chromium profile (a new tab in that profile's window, also
+   when the browser is already running), a Chromium private window, a
+   Firefox profile while another profile is running, a Firefox private
+   window, a plain browser, a Flatpak browser and its profiles.
+4. A rule (`--check <link>` first) opens without the menu.
+5. The browser keeps running after the terminal that ran `xdg-open` is
+   closed.
+6. With no menu program installed, a link opens in the fallback and a
+   notification says why.
+
 ## The menu
 
 <a id="keys"></a>
