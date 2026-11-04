@@ -51,6 +51,7 @@ MIN_MACOS     := 14.0
 
 SOURCES       := $(sort $(wildcard Sources/*.swift))
 PLIST         := Resources/Info.plist
+EXAMPLE_CONFIG := config.example.toml
 BUNDLE_ID     := $(shell /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' $(PLIST))
 LSREGISTER    := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
@@ -74,7 +75,7 @@ ifneq ($(SIGNING),$(strip $(shell cat $(SIGNING_STAMP) 2>/dev/null)))
 $(shell mkdir -p $(BUILD) && printf '%s\n' '$(SIGNING)' > $(SIGNING_STAMP) && rm -f $(STAMP))
 endif
 
-$(STAMP): $(SOURCES) $(PLIST) $(ENTITLEMENTS) Makefile
+$(STAMP): $(SOURCES) $(PLIST) $(ENTITLEMENTS) $(EXAMPLE_CONFIG) Makefile
 	@# Built next to the destination and moved into place only when whole, so
 	@# a compile error leaves the previous build alone.
 	rm -rf "$(APP).tmp" $(BUILD)/obj
@@ -85,10 +86,12 @@ $(STAMP): $(SOURCES) $(PLIST) $(ENTITLEMENTS) Makefile
 	done
 	lipo -create $(BUILD)/obj/$(EXECUTABLE)-* -output "$(APP).tmp/Contents/MacOS/$(EXECUTABLE)"
 	cp $(PLIST) "$(APP).tmp/Contents/Info.plist"
+	@# Shipped in the bundle for --init-config, so a release needs no source tree.
+	cp $(EXAMPLE_CONFIG) "$(APP).tmp/Contents/Resources/config.example.toml"
 	printf 'APPL????' > "$(APP).tmp/Contents/PkgInfo"
 	@# One checksum over everything the build depends on, settings included,
 	@# so `make install` can tell whether the installed copy is current.
-	{ cat $(SOURCES) $(PLIST) $(ENTITLEMENTS) Makefile; echo "$(ARCH) $(SIGN_IDENTITY) $(CODESIGN_FLAGS)"; } \
+	{ cat $(SOURCES) $(PLIST) $(ENTITLEMENTS) $(EXAMPLE_CONFIG) Makefile; echo "$(ARCH) $(SIGN_IDENTITY) $(CODESIGN_FLAGS)"; } \
 	  | shasum -a 256 | cut -d' ' -f1 > "$(APP).tmp/Contents/Resources/source.sha256"
 	@# The bundle is signed as a whole so the signature covers Info.plist,
 	@# which is what LaunchServices and the privacy database look at.
@@ -148,7 +151,7 @@ install: build
 
 set-default:
 	@test -d "$(DEST)" || { echo "$(DEST) is not installed; run make install first"; exit 1; }
-	swift scripts/set-default-browser.swift "$(DEST)"
+	"$(DEST)/Contents/MacOS/$(EXECUTABLE)" --set-default
 
 uninstall:
 	pkill -f "$(DEST)/Contents/MacOS/$(EXECUTABLE)" 2>/dev/null || true

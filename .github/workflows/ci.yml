@@ -116,10 +116,16 @@ jobs:
 
       - name: CLI smoke test
         run: |
-          # Point the app at the example config, not anything on the runner.
+          # Point the app at an empty config dir, not anything on the runner,
+          # and let --init-config fill it from the copy shipped in the bundle.
           export XDG_CONFIG_HOME="$RUNNER_TEMP/xdg"
-          mkdir -p "$XDG_CONFIG_HOME/browser-picker"
-          cp config.example.toml "$XDG_CONFIG_HOME/browser-picker/config.toml"
+          "$BIN" --init-config
+          cmp config.example.toml "$XDG_CONFIG_HOME/browser-picker/config.toml"
+          echo "# edited" >> "$XDG_CONFIG_HOME/browser-picker/config.toml"
+          "$BIN" --init-config
+          grep -q '^# edited$' "$XDG_CONFIG_HOME/browser-picker/config.toml" ||
+            { echo "::error::--init-config overwrote an existing config"; exit 1; }
+          "$BIN" --help
 
           want="browser-picker $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
           got=$("$BIN" --version)

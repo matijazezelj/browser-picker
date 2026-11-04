@@ -51,25 +51,95 @@ It is written in Swift with no dependencies and builds with plain `swiftc`.
 
 ## Install
 
+There are two ways in. **A release** is the quickest: a prebuilt app, no
+Xcode tools needed. **Building from source** takes a minute more but lets you
+sign with your own stable identity, which keeps the macOS permissions across
+upgrades (see [Permissions](#permissions)).
+
+Both end in the same place: `Browser Picker.app` in `~/Applications`, set as
+the default browser, with a config in `~/.config/browser-picker/config.toml`.
+The app has a small command-line side; this alias makes it shorter to reach
+and is used below:
+
+```sh
+alias browser-picker="$HOME/Applications/Browser Picker.app/Contents/MacOS/BrowserPicker"
+```
+
+### From a release
+
+Each [release](https://github.com/matijazezelj/browser-picker/releases) lists
+what changed in it and has a zipped app for Apple silicon (built and tested by
+GitHub Actions) with its SHA-256. On Intel, build from source.
+
+1. **Download and check it.** Either click the two files on the release page,
+   or with the [GitHub CLI](https://cli.github.com):
+
+   ```sh
+   cd ~/Downloads
+   gh release download --repo matijazezelj/browser-picker --pattern 'Browser-Picker-*'
+   shasum -a 256 -c Browser-Picker-*-arm64.zip.sha256
+   ```
+
+2. **Unpack it into `~/Applications`.**
+
+   ```sh
+   mkdir -p ~/Applications
+   ditto -x -k Browser-Picker-*-arm64.zip ~/Applications
+   ```
+
+3. **Clear the quarantine flag** -- only for an ad-hoc release. The release
+   notes say how each release was signed. A release that is **ad-hoc signed
+   and not notarized** (the current ones: no Apple developer identity is
+   behind them) is refused by macOS when downloaded with a browser, because
+   it is quarantined:
+
+   ```sh
+   xattr -dr com.apple.quarantine ~/Applications/"Browser Picker.app"
+   ```
+
+   If you would rather not clear that flag on a binary you did not build,
+   build from source instead. A notarized release needs no such step.
+
+4. **Make it the default browser, and start a config.**
+
+   ```sh
+   browser-picker --set-default   # macOS asks "change your default web browser?"
+   browser-picker --init-config   # writes the example config; never overwrites
+   browser-picker --list          # what it found, and the rules
+   ```
+
+   You can also choose it under **System Settings › Desktop & Dock › Default
+   web browser**.
+
+5. **Grant Accessibility** when asked, the first time you pick a Safari
+   profile that has no window open yet (see [Permissions](#permissions)).
+
+**Upgrading** is steps 1-3 again; the config is kept. An ad-hoc release is
+signed afresh each time, so after upgrading to one, switch Browser Picker back
+on under Accessibility (see [Rebuilding drops the grants](#rebuilding-drops-the-grants)).
+A notarized release keeps the same signature, and the grants carry over.
+
+### From source
+
+Needs the Xcode Command Line Tools (`xcode-select --install`) for `swiftc` and
+`make`.
+
 ```sh
 git clone https://github.com/matijazezelj/browser-picker.git
 cd browser-picker
-make install        # builds and copies "Browser Picker.app" to ~/Applications
-make set-default    # asks macOS to make it the default browser
+scripts/create-signing-identity.sh   # optional, once: keeps the grants across rebuilds
+make install                         # builds and copies "Browser Picker.app" to ~/Applications
+make set-default                     # same as browser-picker --set-default
+browser-picker --init-config
 ```
 
-`make set-default` shows macOS's own confirmation dialog ("Do you want to
-change your default web browser?"). You can also choose Browser Picker under
-**System Settings › Desktop & Dock › Default web browser**.
+The signing identity is optional but recommended: without it every build is
+ad-hoc signed and the grants have to be given again after each one (see
+[Keeping the grants across rebuilds](#keeping-the-grants-across-rebuilds)).
+`make install` rebuilds only when the source or the signing settings change.
 
-Then start from the example config:
-
-```sh
-mkdir -p ~/.config/browser-picker
-cp config.example.toml ~/.config/browser-picker/config.toml
-```
-
-and grant **Accessibility** when asked (see [Permissions](#permissions)).
+**Upgrading:** `git pull && make install`. With the signing identity, the
+grants carry over.
 
 Make variables:
 
@@ -83,58 +153,24 @@ Make variables:
 Other targets: `make build` (to `./build/Browser Picker.app`), `make test`,
 `make clean`.
 
-### Install from a release
-
-Each [release](https://github.com/matijazezelj/browser-picker/releases) has
-a zipped app for Apple silicon, built and tested by GitHub Actions, and its
-SHA-256, and lists what changed in that version (its section of
-[`CHANGELOG.md`](CHANGELOG.md)). On Intel, build from source as above.
-
-Each release's notes say how it was signed. The release workflow signs with a
-Developer ID certificate and notarizes the app when the repository has the
-signing secrets (see [Maintainers: notarized releases](#maintainers-notarized-releases)).
-A notarized build opens like any downloaded app: unzip it, move it to
-`~/Applications`, open it once. Its signature stays the same from release to
-release, so the grants carry over when you upgrade.
-
-Until then, a release build is **ad-hoc signed and not notarized** (no
-Apple developer identity is behind it), so macOS quarantines the download and
-refuses to open it. Check the zip, unpack it, and clear the quarantine flag:
-
-```sh
-cd ~/Downloads
-shasum -a 256 -c Browser-Picker-<version>-arm64.zip.sha256
-ditto -x -k Browser-Picker-<version>-arm64.zip .
-xattr -dr com.apple.quarantine "Browser Picker.app"
-mkdir -p ~/Applications && mv "Browser Picker.app" ~/Applications/
-open ~/Applications/"Browser Picker.app"   # registers it with macOS
-```
-
-If you would rather not clear the quarantine flag on a binary you did not
-build, install from source instead. Then choose Browser Picker under
-**System Settings › Desktop & Dock › Default web browser**, copy
-[`config.example.toml`](config.example.toml) to
-`~/.config/browser-picker/config.toml`, and grant **Accessibility** when
-asked. An ad-hoc release is signed afresh each time, so after an upgrade to
-one, switch Browser Picker back on under Accessibility (see
-[Rebuilding drops the grants](#rebuilding-drops-the-grants)).
-
 ### Uninstall
 
-```sh
-make uninstall
-```
+From source: `make uninstall` quits the app, removes it from `PREFIX`,
+unregisters it from LaunchServices and clears its permission grants.
 
-This quits the app, removes it from `PREFIX`, unregisters it from
-LaunchServices and clears its permission grants. Your config is left in
-`~/.config/browser-picker`. Pick another default browser in System Settings
-afterwards; macOS falls back to Safari if you do not.
-
-To also forget the remembered last pick and the cached Safari profile names:
+From a release, the same by hand:
 
 ```sh
-defaults delete local.browser-picker
+pkill -f "Browser Picker.app/Contents/MacOS/BrowserPicker"
+rm -rf ~/Applications/"Browser Picker.app"
+tccutil reset Accessibility local.browser-picker
+tccutil reset AppleEvents local.browser-picker
 ```
+
+Either way your config is left in `~/.config/browser-picker`. Pick another
+default browser in System Settings afterwards; macOS falls back to Safari if
+you do not. To also forget the remembered last pick and the cached Safari
+profile names: `defaults delete local.browser-picker`.
 
 ## The menu
 
@@ -580,7 +616,6 @@ starts it again.
 | `Tests/ConfigTests.swift` | config parser tests, and the `main` that runs every suite |
 | `Tests/HostTests.swift` | host extraction and matching: IDNs, userinfo tricks, IP literals, malformed links, wildcard boundaries |
 | `Tests/RouterTests.swift` | every routing and failure path, with a fake launcher |
-| `scripts/set-default-browser.swift` | sets the default `http`/`https` handler |
 | `scripts/create-signing-identity.sh` | creates the local self-signed signing identity |
 | `Resources/BrowserPicker.entitlements` | the Apple Events entitlement for hardened-runtime builds |
 

@@ -6,7 +6,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-04
+
+### Added
+
+- `--set-default` asks macOS to make the app the default browser, and
+  `--init-config` writes the example config (now shipped inside the app) to
+  `~/.config/browser-picker/config.toml` without overwriting one. A release
+  install no longer needs the source tree or the Swift toolchain;
+  `make set-default` uses the same code. `--help` lists the commands.
+
 ### Changed
+
+- The README's install section leads with releases, step by step, and covers
+  upgrading and uninstalling for both release and source installs.
 
 - Release pages show that version's section of this changelog, and the
   release workflow refuses a tag that has none
@@ -20,6 +33,10 @@ All notable changes to this project are documented here. The format follows
   printed "allow Browser Picker again" instead of "the existing grants still
   apply", and switching between two certificates would not have reset the
   old grants.
+
+### Removed
+
+- `scripts/set-default-browser.swift`, replaced by `--set-default`.
 
 ## [0.2.1] - 2026-11-04
 

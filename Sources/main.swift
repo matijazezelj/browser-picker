@@ -161,10 +161,89 @@ func cli(_ args: [String]) -> Int32 {
         for w in config.patternWarnings { print("warning: \(w)") }
         return 0
 
+    case "--set-default":
+        return setDefaultBrowser()
+
+    case "--init-config":
+        return initConfig()
+
+    case "--help", "-h":
+        print(usage)
+        return 0
+
     default:
-        FileHandle.standardError.write(Data("usage: browser-picker [--list | --check URL | --version]\n".utf8))
+        FileHandle.standardError.write(Data((usage + "\n").utf8))
         return 2
     }
+}
+
+let usage = """
+    usage: browser-picker COMMAND
+      --list           browsers, profiles and rules as the app sees them
+      --check URL      which rule and target a link would get
+      --init-config    write the example config to \(Paths.config.path) (never overwrites)
+      --set-default    ask macOS to make this app the default browser
+      --version        print the version
+    """
+
+/// Makes this bundle the handler for http and https, which is what macOS calls
+/// the default web browser. macOS shows its own confirmation dialog, so this
+/// cannot happen silently. A release user has no source tree and maybe no
+/// Swift toolchain, so this lives in the app rather than in a script.
+func setDefaultBrowser() -> Int32 {
+    let app = Bundle.main.bundleURL.standardizedFileURL
+    guard app.pathExtension == "app" else {
+        FileHandle.standardError.write(Data("browser-picker: --set-default must run from inside Browser Picker.app\n".utf8))
+        return 1
+    }
+    let current = NSWorkspace.shared.urlForApplication(toOpen: URL(string: "https://example.com")!)
+    if current?.standardizedFileURL == app {
+        print("Browser Picker is already the default browser")
+        return 0
+    }
+    // One call per scheme; asking for https after http shows a single dialog.
+    let group = DispatchGroup()
+    var failed = false
+    for scheme in ["http", "https"] {
+        group.enter()
+        NSWorkspace.shared.setDefaultApplication(at: app, toOpenURLsWithScheme: scheme) { error in
+            if let error {
+                FileHandle.standardError.write(Data("browser-picker: \(scheme): \(error.localizedDescription)\n".utf8))
+                failed = true
+            }
+            group.leave()
+        }
+    }
+    // The completion handlers run on the main queue, so keep it turning.
+    while group.wait(timeout: .now()) == .timedOut {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    }
+    if !failed { print("Browser Picker is now the default browser") }
+    return failed ? 1 : 0
+}
+
+/// Copies the example config shipped in the bundle to the config path, so a
+/// release user does not need the source tree to start. Never overwrites.
+func initConfig() -> Int32 {
+    let dest = Paths.config
+    if FileManager.default.fileExists(atPath: dest.path) {
+        print("\(dest.path) already exists; left as it is")
+        return 0
+    }
+    guard let example = Bundle.main.url(forResource: "config.example", withExtension: "toml") else {
+        FileHandle.standardError.write(Data("browser-picker: no config.example.toml in the app bundle\n".utf8))
+        return 1
+    }
+    do {
+        try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: example, to: dest)
+    } catch {
+        FileHandle.standardError.write(Data("browser-picker: \(error.localizedDescription)\n".utf8))
+        return 1
+    }
+    print("wrote \(dest.path)")
+    return 0
 }
 
 // MARK: main
