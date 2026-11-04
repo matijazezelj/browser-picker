@@ -76,7 +76,7 @@ jobs:
           needed=$(readelf -d "$BIN" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' | sort -u)
           echo "NEEDED:"; echo "$needed" | awk '{print "  " $0}'
           bad=$(echo "$needed" | grep -vE '^(libc|libm|libdl|libpthread|librt|libutil|libgcc_s|libstdc\+\+|ld-linux[^ ]*)\.so' || true)
-          [ -z "$bad" ] || { echo "::error::links a library that is not part of the C runtime: $(echo $bad)"; exit 1; }
+          [ -z "$bad" ] || { echo "::error::links a library that is not part of the C runtime: $(echo "$bad" | tr "\n" " ")"; exit 1; }
           got=$("$BIN" --version)
           [ "$got" = "browser-picker $VERSION" ] || { echo "::error::--version printed '$got'"; exit 1; }
 
