@@ -110,15 +110,31 @@ struct Router {
         return .rejected
     }
 
-    /// The text of a GetURL Apple event: checked before anything else.
-    func openLink(_ text: String, forcePicker: Bool) -> Outcome {
+    /// The text of a GetURL Apple event, or of `--open`: checked before
+    /// anything else.
+    ///
+    /// `target` (from `--target REF`) names where the link goes, as a list
+    /// of references like a rule's `open`: the first that exists is opened,
+    /// skipping the rules and the menu. When none exists, a notification
+    /// says so and the menu is shown, so the link never goes somewhere
+    /// else silently.
+    func openLink(_ text: String, forcePicker: Bool, target: [String]? = nil) -> Outcome {
         guard let url = webURL(text) else { return reject() }
-        return open(url, forcePicker: forcePicker)
+        return open(url, forcePicker: forcePicker, target: target)
+    }
+
+    /// The notification for a `--target` that names nothing on this
+    /// machine. The references were typed by the local user, not taken from
+    /// the link; of the link only the host is shown.
+    static func noSuchTargetMessage(_ references: [String]) -> String {
+        let r = references.count == 1 ? references[0]
+            : "[" + references.map { "\"\($0)\"" }.joined(separator: ", ") + "]"
+        return "No such target: \(r)"
     }
 
     /// An http(s) link. Anything else is rejected here as well, so no caller
     /// can get past the check.
-    func open(_ url: URL, forcePicker: Bool) -> Outcome {
+    func open(_ url: URL, forcePicker: Bool, target references: [String]? = nil) -> Outcome {
         guard isWebURL(url) else { return reject() }
         let config: Config
         do {
@@ -129,6 +145,16 @@ struct Router {
         let targets = self.targets(config).filter { !isOwn($0.bundleID) }
         if targets.isEmpty {
             return openFallback(url, config: config, targets: targets, reason: "No browsers found to choose from.")
+        }
+
+        var forcePicker = forcePicker
+        if let references {
+            if let t = targets.first(matchingAny: references) {
+                // Asked for by name: not a pick, so not remembered.
+                return launchChosen(url, t, config: config, targets: targets)
+            }
+            notify(Router.noSuchTargetMessage(references), "Choose a browser for \(Router.label(url))")
+            forcePicker = true
         }
 
         let chosen: Target
@@ -148,7 +174,10 @@ struct Router {
             if picked.kind != .privateWindow { rememberPick(picked.title) }
             chosen = picked
         }
+        return launchChosen(url, chosen, config: config, targets: targets)
+    }
 
+    private func launchChosen(_ url: URL, _ chosen: Target, config: Config, targets: [Target]) -> Outcome {
         do {
             try launch(url, chosen)
             return .opened(chosen)

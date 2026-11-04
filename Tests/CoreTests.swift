@@ -32,6 +32,7 @@ enum CoreTests {
         routing()
         profiles()
         report()
+        targetOption()
     }
 
     // MARK: open / fallback as lists
@@ -312,6 +313,98 @@ enum CoreTests {
             r = Report.check(bad, config: c, targets: targets)
             check(r.status == 3 && r.output.contains("rejected") && !r.output.contains(bad.isEmpty ? "\u{0}" : bad),
                   "check rejects \(bad.debugDescription) without echoing it")
+        }
+    }
+
+    // MARK: --target REF
+
+    static func targetOption() {
+        func refs(_ t: String, line: Int = #line) -> [String]? {
+            do { return try Config.references(t) } catch { return nil }
+        }
+        check(refs("Google Chrome:Work") == ["Google Chrome:Work"], "a bare reference, spaces kept")
+        check(refs("  Firefox  ") == ["Firefox"], "trimmed")
+        check(refs("\"Safari:Work\"") == ["Safari:Work"], "a quoted string")
+        check(refs("'brave-browser.desktop:Home'") == ["brave-browser.desktop:Home"], "a literal string")
+        check(refs(#"["Safari:Work", 'Google Chrome:Work',]"#) == ["Safari:Work", "Google Chrome:Work"], "a list")
+        for bad in ["", "   ", "[]", #"["Safari", ""]"#, "\"\"", "[\"a\"", "[1]", "\"a\" extra",
+                    "Firefox\n[picker]", #"["a"]\n[[rule]]"#, "[true]"] {
+            do {
+                _ = try Config.references(bad)
+                check(false, "--target \(bad.debugDescription) should be refused")
+            } catch ConfigError.invalid(let m) {
+                check(m.hasPrefix("--target"), "error names --target: \(m)")
+            } catch {
+                check(false, "--target \(bad.debugDescription): unexpected \(error)")
+            }
+        }
+
+        typealias F = RouterTests.Fake
+        let chromeWork = RouterTests.chromeWork, firefox = RouterTests.firefox, safariWork = RouterTests.safariWork
+        // A rule that would send everything to Safari: --target must win.
+        let rules = "[[rule]]\nhosts = [\"*\"]\nopen = \"Safari:Work\"\n"
+
+        do {
+            let f = F()
+            f.config = RouterTests.config(rules)
+            let o = f.router.openLink("https://a.example.com/?token=s3cret", forcePicker: false, target: ["Firefox"])
+            check(o == .opened(firefox), "--target opens that target, not the rule's: \(o)")
+            check(f.shown.isEmpty && f.notes.isEmpty, "no menu, nothing said")
+            check(f.remembered.isEmpty, "a --target is not remembered as the last pick")
+        }
+        do {
+            let f = F()
+            f.config = RouterTests.config(rules)
+            let o = f.router.openLink("https://a.example.com/", forcePicker: false,
+                                      target: ["Opera", "Google Chrome:Work", "Firefox"])
+            check(o == .opened(chromeWork), "first existing reference of a list")
+        }
+        do {
+            // Nothing matches: said, then the menu (not the rule).
+            let f = F()
+            f.config = RouterTests.config(rules)
+            f.pick = { _, _ in firefox }
+            let o = f.router.openLink("https://a.example.com/path?token=s3cret", forcePicker: false,
+                                      target: ["Opera:Work"])
+            check(o == .opened(firefox), "no such target -> the menu's pick: \(o)")
+            check(f.shown.count == 1, "the menu was shown")
+            check(f.notes.count == 1 && f.notes[0].message == "No such target: Opera:Work"
+                  && f.notes[0].subtitle == "Choose a browser for a.example.com",
+                  "said, with the host only: \(f.notes)")
+            check(!f.notes.contains { "\($0.message) \($0.subtitle ?? "")".contains("s3cret") }, "no query")
+            check(!f.launched.contains(safariWork.title), "the rule was not used")
+        }
+        do {
+            // Nothing matches and the menu is cancelled: nothing opens.
+            let f = F()
+            f.config = RouterTests.config(rules)
+            let o = f.router.openLink("https://a.example.com/", forcePicker: false, target: ["Opera", "Arc"])
+            check(o == .cancelled && f.launched.isEmpty, "cancel after no such target")
+            check(f.notes.first?.message == #"No such target: ["Opera", "Arc"]"#, "list described: \(f.notes)")
+        }
+        do {
+            // The URL gate comes first: a switch is rejected, --target or not.
+            let f = F()
+            for bad in ["--renderer-cmd-prefix=/tmp/x", "javascript:alert(1)", "-https://example.com"] {
+                let o = f.router.openLink(bad, forcePicker: false, target: ["Firefox"])
+                check(o == .rejected, "rejected with --target: \(bad)")
+            }
+            check(f.launched.isEmpty && f.shown.isEmpty, "nothing opened")
+        }
+        do {
+            // The target fails to launch: the usual fallback chain.
+            let f = F()
+            f.config = RouterTests.config("[picker]\nfallback = \"Safari:Work\"\n")
+            f.failing = [firefox.title]
+            let o = f.router.openLink("https://a.example.com/", forcePicker: false, target: ["Firefox"])
+            check(o == .fallback(safariWork), "failed --target -> fallback: \(o)")
+            check(f.launched == [firefox.title, safariWork.title], "\(f.launched)")
+        }
+        do {
+            // The old two-argument form is unchanged.
+            let f = F()
+            f.config = RouterTests.config(rules)
+            check(f.router.openLink("https://a.example.com/", forcePicker: false) == .opened(safariWork), "no target: rules")
         }
     }
 }

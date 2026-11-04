@@ -34,7 +34,12 @@ same on both**: one `config.toml` can serve a Mac and a Linux machine, with
 [References](#references-browserprofile)). The command-line flags
 (`--list`, `--check`, `--init-config`, `--set-default`, `--version`,
 `--help`) behave the same on both; the Linux binary adds `--open URL`, which
-its desktop file uses. The macOS-only parts are marked as such below.
+its desktop file uses, and `--target REF --open URL`, which opens a link in a
+given target, skipping the rules and the menu (see
+[References](#references-browserprofile)). The macOS app takes links only as
+Apple events, so it has neither: a command-line `--open` there would run
+outside the app, without its Accessibility grant or its menu. The
+macOS-only parts are marked as such below.
 
 ## Features
 
@@ -446,7 +451,7 @@ open = ["Safari:Work", "Google Chrome:Work"]
 | `[picker]` | `show_private` | bool | `true` | Add a `<Browser>: Private` entry for each browser with private windows. |
 | `[picker]` | `position` | `"cursor"` \| `"center"` | `"cursor"` | macOS: open the menu under the mouse, or centred on the screen the mouse is on. Ignored on Linux, where the menu program places itself (Wayland gives no global cursor position). |
 | `[picker]` | `fallback` | reference or list | `"Safari"` | Where links go when the picker cannot run (bad config, no browsers) or the chosen target fails to open. A list is tried in order. `""` or `[]`: no fallback target. |
-| `[picker]` | `command` | array of strings | unset | Linux: the menu program and its arguments, run directly, never through a shell. It must speak the dmenu protocol: entries on stdin, one per line; the chosen line on stdout; a non-zero exit or empty output cancels. Unset: the first installed menu program, in the order given in [The Linux menu](#the-linux-menu) (Wayland and X11 differ). Ignored on macOS. |
+| `[picker]` | `command` | array of strings | unset | Linux: the menu program and its arguments, run directly, never through a shell. It must speak the dmenu protocol: entries on stdin, one per line; the chosen line on stdout; empty output or a non-zero exit cancels, except exit status **127**, which means "this menu is unavailable": the auto-detected menus are tried next, then the `fallback`. (127 is also what a shell reports for a command not found, so a wrapper script can pass that through.) The menu gets the link's host and the preselected entry in the environment, never in its arguments; see [The Linux menu](#the-linux-menu). Unset: the first installed menu program, in the order given in [The Linux menu](#the-linux-menu) (Wayland and X11 differ). Ignored on macOS. |
 | `[browsers]` | `include` | array of strings | `[]` | Browsers to show, in this order, by name or bundle ID. Browsers not listed are hidden. Names that match nothing installed are skipped. Empty means every browser: Safari first, then the rest alphabetically. |
 | `[browsers]` | `exclude` | array of strings | `[]` | Browsers never to show, by name or bundle ID. |
 | `[[rule]]` | `hosts` | array of strings | (required) | Host globs; see below. |
@@ -560,6 +565,21 @@ empty name. `--list` shows which entry each list resolves to here.
 A rule that names a target this machine does not have (a profile that does
 not exist, a browser that is not installed; with a list, none of them) shows
 the menu instead of failing, so one config can be shared between machines.
+
+On Linux, `browser-picker --target REF --open URL` takes a reference in the
+same syntax, or a list written as a TOML array, so a script can send a link
+to a given target:
+
+```sh
+browser-picker --target 'Google Chrome:Work' --open https://example.com/
+browser-picker --target '["Safari:Work", "Firefox"]' --open https://example.com/
+```
+
+The rules and the menu are skipped, and the pick is not remembered. The link
+still has to be an http(s) address with a valid host. When the reference
+names nothing on this machine, a notification says "No such target" (with the
+link's host only) and the menu opens: the link never goes somewhere else
+without a word.
 
 ### Testing the config: `--list` and `--check`
 

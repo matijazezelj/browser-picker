@@ -136,6 +136,35 @@ extension Config {
         return config
     }
 
+    /// A target reference or list of them as given on a command line
+    /// (`--target REF`), in the syntax of a rule's `open`:
+    ///   Google Chrome:Work                 one reference, no quotes needed
+    ///   "Safari:Work"                      a quoted TOML string
+    ///   ["Safari:Work", "Google Chrome"]   a TOML array of strings
+    /// Errors (an empty reference, an empty list, bad syntax) are
+    /// ConfigError.invalid, with no line number.
+    static func references(_ text: String) throws -> [String] {
+        let t = text.trimmingCharacters(in: .whitespaces)
+        // One line: the text is put into a [[rule]] below, and must not be
+        // able to add keys or tables of its own.
+        guard !t.contains(where: \.isNewline) else {
+            throw ConfigError.invalid("--target must be one line")
+        }
+        guard let first = t.unicodeScalars.first, first == "[" || first == "\"" || first == "'" else {
+            guard !t.isEmpty else {
+                throw ConfigError.invalid("--target needs a reference such as \"Firefox\" or \"Google Chrome:Work\"")
+            }
+            return [t]
+        }
+        // The same parser and checks as `open` in a [[rule]].
+        do {
+            let c = try parse("[[rule]]\nhosts = [\"*\"]\nopen = \(t)\n")
+            return c.rules[0].open
+        } catch ConfigError.syntax(_, let message) {
+            throw ConfigError.invalid("--target: \(message.replacingOccurrences(of: "open ", with: "the target "))")
+        }
+    }
+
     /// First rule with a glob matching the host. Globs are fnmatch(3)
     /// patterns, as in a sh `case`, so "*.slack.com" does not match
     /// "slack.com" itself. Host and patterns are both put into the canonical

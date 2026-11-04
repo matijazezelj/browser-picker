@@ -21,6 +21,14 @@ All notable changes to this project are documented here. The format follows
   a shell, dmenu protocol). The macOS app ignores it.
 - Releases also carry `browser-picker-<version>-linux-x86_64.tar.gz` and
   `-linux-aarch64.tar.gz`, each with a `.sha256`.
+- `browser-picker --target REF --open URL` (Linux) opens a link in the given
+  target, or the first that exists of a list (`--target '["Safari:Work",
+  "Firefox"]'`), skipping the rules and the menu. A reference that names
+  nothing here is reported in a notification (host only) and the menu opens.
+  The macOS app takes links only as Apple events and has no `--open`.
+- `[picker] command`: exit status 127 means the menu is unavailable, and the
+  auto-detected menus are tried next; any other non-zero status still
+  cancels.
 
 ### Changed
 
