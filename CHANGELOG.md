@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-04
+
 ### Fixed
 
 - `make install` kept an existing build after a signing identity was created
