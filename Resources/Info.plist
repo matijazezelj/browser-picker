@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Browser Picker's Info.plist, copied into the bundle by `make build`.
+  CFBundleIdentifier must equal Paths.bundleID in Sources/Model.swift;
+  `make test` checks that the two agree.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>local.browser-picker</string>
+	<key>CFBundleName</key>
+	<string>Browser Picker</string>
+	<key>CFBundleDisplayName</key>
+	<string>Browser Picker</string>
+	<key>CFBundleExecutable</key>
+	<string>BrowserPicker</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<!-- No Dock icon: it lives for one menu per link. -->
+	<key>LSUIElement</key>
+	<true/>
+	<!-- macOS asks for Automation once per target app (Safari, System Events)
+	     and shows this string in that dialog. -->
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Browser Picker opens links in the Safari profile you pick, reusing a window of that profile when one is open.</string>
+	<!-- The two declarations that let macOS offer it as a web browser: the
+	     http/https schemes, and HTML files as a viewer. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Web site URL</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>http</string>
+				<string>https</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>HTML document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.html</string>
+				<string>public.xhtml</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

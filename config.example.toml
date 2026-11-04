@@ -1,0 +1,83 @@
+# Browser Picker -- example configuration.
+#
+# Copy this file to ~/.config/browser-picker/config.toml (or
+# $XDG_CONFIG_HOME/browser-picker/config.toml) and edit it. It is read on
+# every link, so an edit applies to the next click; no restart needed.
+#
+# Every key is optional: a missing file, or a missing key, means the default
+# shown here. A mistake (an unknown key, a typo in a table name, a value of
+# the wrong type) is reported with its line number in a notification, and
+# links then open in the `fallback` browser until it is fixed: a broken
+# config costs you the choice, never the link.
+#
+# Syntax is a small TOML subset: [tables], [[rule]] blocks, "strings" (with
+# \ escapes) or 'literal strings', true/false, and ["arrays", "of strings"]
+# that may span lines and end with a comma. Anything else is an error.
+#
+# References
+#   Rules and `fallback` name a target as "Browser:Profile", e.g.
+#   "Safari:Work" or "Google Chrome:Home"; "Safari:Private" is a private
+#   window. Case and spaces around the colon do not matter, and the browser
+#   may be given by bundle ID ("com.brave.Browser:Work"). A reference with no
+#   profile ("Firefox") means that browser's first entry.
+#   The browser and profile names are the ones the picker shows; run
+#     "$HOME/Applications/Browser Picker.app/Contents/MacOS/BrowserPicker" --list
+#   to print every target on this Mac exactly as it can be written here.
+#
+# Option-click
+#   Holding Option while the link opens skips the rules and always shows the
+#   picker.
+
+[picker]
+# Preselect the entry picked last time, so Return takes it again.
+remember_last = true
+# Add a "<Browser>: Private" entry for each browser that has private windows.
+show_private = true
+# Where the menu appears: "cursor" (under the mouse) or "center" (of the
+# screen the mouse is on).
+position = "cursor"
+# A reference, used when the picker cannot run at all (bad config, no
+# browsers found) or opening the chosen target fails.
+fallback = "Safari"
+
+[browsers]
+# Browsers to show, in this order, by name or bundle ID; any browser not
+# listed is hidden. Empty shows every installed browser, Safari first and
+# the rest alphabetically.
+include = []
+# Browsers never to show, even when `include` is empty.
+exclude = []
+
+# Rules, first match wins: a link whose host matches one of `hosts` opens in
+# `open` without asking. The patterns are sh-style globs (fnmatch) on the
+# bare host alone -- lowercased, without scheme, user, port, path or query --
+# because a word in a query string says nothing about who owns the link.
+#   "*"              any run of characters, dots included
+#   "*example*"      any host containing "example"
+#   "*.slack.com"    any subdomain of slack.com, but NOT slack.com itself;
+#                    list both to cover both
+#   "?" and "[abc]"  one character, one of a set
+# A rule naming a target this Mac does not have shows the picker instead, so
+# one file can be shared between Macs.
+#
+# The rules below are examples: rename the profiles to the ones --list
+# prints, or delete them.
+
+# Work: the company's own domain and its chat tool.
+[[rule]]
+hosts = ["example.com", "*.example.com"]
+open = "Safari:Work"
+
+[[rule]]
+hosts = ["slack.com", "*.slack.com"]
+open = "Safari:Work"
+
+# Home: everything under example.org.
+[[rule]]
+hosts = ["example.org", "*.example.org"]
+open = "Safari:Home"
+
+# A Chromium profile, by the name Chrome shows for it (not its folder name).
+# [[rule]]
+# hosts = ["github.com", "*.github.com"]
+# open = "Google Chrome:Home"

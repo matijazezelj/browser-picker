@@ -1,0 +1,93 @@
+# Publish a GitHub Release when a v* tag is pushed: build and test on Apple
+# Silicon, zip the app with ditto, and attach the zip and its SHA-256.
+#
+#   git tag v1.2.0 && git push origin v1.2.0
+#
+# The tag must match CFBundleShortVersionString in Resources/Info.plist.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: macos-26
+    timeout-minutes: 30
+    permissions:
+      contents: write # create the release and upload its assets
+    env:
+      APP: build/Browser Picker.app
+      BIN: build/Browser Picker.app/Contents/MacOS/BrowserPicker
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the tag against Info.plist
+        run: |
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::tag $TAG does not match CFBundleShortVersionString $version in Resources/Info.plist"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Toolchain
+        run: swiftc --version
+
+      - name: Build and test
+        run: |
+          make build
+          make test
+          archs=$(lipo -archs "$BIN")
+          [ "$archs" = arm64 ] || { echo "::error::expected an arm64 binary, got: $archs"; exit 1; }
+          codesign --verify --strict --verbose=2 "$APP"
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          zip="Browser-Picker-$VERSION-arm64.zip"
+          ditto -c -k --keepParent "$APP" "dist/$zip"
+          (cd dist && shasum -a 256 "$zip" > "$zip.sha256" && cat "$zip.sha256")
+
+      - name: Write the release notes
+        run: |
+          cat > "$RUNNER_TEMP/notes.md" <<NOTES
+          Browser Picker $VERSION for Apple Silicon Macs (macOS 14 or later).
+
+          **This build is ad-hoc signed and not notarized.** macOS quarantines
+          downloaded apps and will refuse to open it. After unzipping, either
+          clear the quarantine flag:
+
+          \`\`\`sh
+          xattr -dr com.apple.quarantine "Browser Picker.app"
+          \`\`\`
+
+          or build it from source with \`make install\` (see the README).
+
+          Check the download against the checksum before you open it:
+
+          \`\`\`sh
+          shasum -a 256 -c Browser-Picker-$VERSION-arm64.zip.sha256
+          \`\`\`
+          NOTES
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$TAG" dist/* \
+            --verify-tag \
+            --title "Browser Picker $VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md"

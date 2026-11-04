@@ -1,0 +1,82 @@
+# Build, test and smoke-test the app on every push to main and every pull
+# request. The zipped app is kept as a workflow artifact for a couple of weeks.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test
+    # macos-26 is GitHub's newest Apple Silicon (arm64) image.
+    runs-on: macos-26
+    timeout-minutes: 20
+    env:
+      APP: build/Browser Picker.app
+      BIN: build/Browser Picker.app/Contents/MacOS/BrowserPicker
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcode-select -p
+          swiftc --version
+
+      - name: Build
+        run: make build
+
+      - name: Test
+        run: make test
+
+      - name: Check the bundle
+        run: |
+          archs=$(lipo -archs "$BIN")
+          echo "architectures: $archs"
+          [ "$archs" = arm64 ] || { echo "::error::expected an arm64 binary, got: $archs"; exit 1; }
+          plutil -lint Resources/Info.plist "$APP/Contents/Info.plist"
+          codesign --verify --strict --verbose=2 "$APP"
+          codesign --display --verbose=2 "$APP"
+
+      - name: CLI smoke test
+        run: |
+          # Point the app at the example config, not anything on the runner.
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/xdg"
+          mkdir -p "$XDG_CONFIG_HOME/browser-picker"
+          cp config.example.toml "$XDG_CONFIG_HOME/browser-picker/config.toml"
+
+          want="browser-picker $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
+          got=$("$BIN" --version)
+          echo "$got"
+          [ "$got" = "$want" ] || { echo "::error::--version printed '$got', expected '$want'"; exit 1; }
+
+          "$BIN" --list
+          "$BIN" --check https://github.com/matijazezelj/browser-picker
+
+      - name: Package
+        run: |
+          zip="$RUNNER_TEMP/Browser-Picker-${GITHUB_SHA::7}.zip"
+          ditto -c -k --keepParent "$APP" "$zip"
+          echo "ZIP=$zip" >> "$GITHUB_ENV"
+
+      - name: Upload the app
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: ${{ env.ZIP }}
+          # Already a zip: upload it as is rather than zipped a second time.
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
