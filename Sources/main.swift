@@ -4,48 +4,13 @@
 // every installed browser and profile, with the one picked last preselected.
 //
 // Anything that fails opens the link in the fallback browser and says why in
-// a notification: a broken picker costs the choice, never the link.
+// a notification: a broken picker costs the choice, never the link. The
+// routing and that fallback chain are in Router.swift, host parsing in
+// Host.swift; this file wires them to the system.
 //
 // Run from a shell it is a CLI instead (no UI): --list, --check URL, --version.
 
 import AppKit
-
-// MARK: host
-
-/// Scheme, userinfo and port stripped, lowercased; a URL with no scheme falls
-/// back to everything before the first / ? or #.
-func hostOf(_ url: URL) -> String {
-    let s = url.absoluteString
-    var host = ""
-    if let scheme = s.range(of: "^[A-Za-z][A-Za-z0-9+.-]*://", options: .regularExpression) {
-        let rest = s[scheme.upperBound...]
-        host = String(rest.prefix { !"/?#".contains($0) })
-    }
-    if host.isEmpty { host = String(s.prefix { !"/?#".contains($0) }) }
-    if let at = host.range(of: "@", options: .backwards) { host = String(host[at.upperBound...]) }
-    if let port = host.range(of: ":[0-9]*$", options: .regularExpression) { host.removeSubrange(port) }
-    return host.lowercased()
-}
-
-// MARK: routing
-
-/// The reference a config rule uses for a target: "Safari:Work".
-func reference(of target: Target) -> String {
-    target.profileName.map { "\(target.browserName):\($0)" } ?? target.browserName
-}
-
-enum Route {
-    case rule(Rule, Target)
-    /// A rule matched but names a target this Mac does not have: ask.
-    case missing(Rule)
-    case picker
-}
-
-func route(host: String, config: Config, targets: [Target]) -> Route {
-    guard let rule = config.rule(forHost: host) else { return .picker }
-    if let target = targets.first(where: { $0.matches(reference: rule.open) }) { return .rule(rule, target) }
-    return .missing(rule)
-}
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -64,12 +29,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let text = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue else { return }
         // Read now: by the time the menu is up, Option may be released.
         let forcePicker = NSEvent.modifierFlags.contains(.option)
+        // Any local app can send this event with any text, so the router
+        // checks it is an http(s) link before anything else (Router.openLink).
         pending.append { [unowned self] in
-            guard let url = URL(string: text) ?? URL(string: text.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed) ?? text) else {
-                notify("Not a URL: \(text)")
-                return
-            }
-            open(url, forcePicker: forcePicker)
+            _ = router.openLink(text, forcePicker: forcePicker)
         }
         scheduleNext()
     }
@@ -105,74 +68,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// .html files and the like, which macOS also hands the default browser.
-    /// A file has no owner to ask about.
     func application(_ application: NSApplication, open urls: [URL]) {
-        let config = (try? Config.load()) ?? Config()
-        for url in urls { openFallback(url, config: config, reason: nil) }
+        for url in urls { _ = router.openFile(url) }
     }
 
-    func open(_ url: URL, forcePicker: Bool) {
-        let config: Config
-        do {
-            config = try Config.load()
-        } catch {
-            openFallback(url, config: Config(), reason: "\(error)")
-            return
-        }
-        let targets = Discovery.targets(config: config)
-        if targets.isEmpty {
-            openFallback(url, config: config, reason: "No browsers found to choose from.")
-            return
-        }
-
-        var chosen: Target?
-        if !forcePicker, case .rule(_, let target) = route(host: hostOf(url), config: config, targets: targets) {
-            chosen = target
-        } else if targets.count == 1 {
-            // Nothing to choose between.
-            chosen = targets[0]
-        } else {
-            let last = defaults.string(forKey: lastKey)
-            let preselect = config.rememberLast ? targets.first { $0.title == last } : nil
-            Picker.position = config.position
-            // Escape or a click outside drops the link on purpose: cancelling
-            // the menu means "not now", not "open it somewhere".
-            guard let picked = Picker.choose(for: url, targets: targets, preselect: preselect) else { return }
-            // A private window is a one-off; preselecting it next time would
-            // make private the default, so it is not remembered.
-            if picked.kind != .privateWindow { defaults.set(picked.title, forKey: lastKey) }
-            chosen = picked
-        }
-
-        guard let target = chosen else { return }
-        do {
-            try Launcher.open(url, in: target)
-        } catch {
-            openFallback(url, config: config, reason: "\(error)", failed: target)
-        }
-    }
-
-    /// The fallback from config, without a profile when that fails too, then
-    /// Safari. Never NSWorkspace.open(url) alone: that would hand the link
-    /// straight back to this app, the default browser.
-    func openFallback(_ url: URL, config: Config, reason: String?, failed: Target? = nil) {
-        if let reason { notify(reason, subtitle: "Opened in \(config.fallback) instead") }
-        let me = Bundle.main.bundleIdentifier?.lowercased()
-        let targets = Discovery.targets(config: config).filter { $0 != failed && $0.bundleID.lowercased() != me }
-        if let t = targets.first(where: { $0.matches(reference: config.fallback) }),
-           (try? Launcher.open(url, in: t)) != nil { return }
-
-        let browser = config.fallback.split(separator: ":").first.map {
-            $0.trimmingCharacters(in: .whitespaces).lowercased()
-        } ?? ""
-        var apps = Discovery.browsers()
-            .filter { $0.name.lowercased() == browser || $0.bundleID.lowercased() == browser }
-            .map(\.appURL)
-        if let safari = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Safari") {
-            apps.append(safari)
-        }
-        for app in apps where (try? Launcher.openPlain(url, app: app)) != nil { return }
-        notify("Could not open \(url.absoluteString) in any browser.")
+    /// The routing and fallback logic lives in Router.swift; this wires the
+    /// real system into it.
+    var router: Router {
+        Router(
+            loadConfig: { try Config.load() },
+            targets: { Discovery.targets(config: $0) },
+            browsers: { Discovery.browsers() },
+            safariApp: { NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Safari") },
+            ownBundleID: Bundle.main.bundleIdentifier ?? Paths.bundleID,
+            lastPick: { [defaults, lastKey] in defaults.string(forKey: lastKey) },
+            rememberPick: { [defaults, lastKey] in defaults.set($0, forKey: lastKey) },
+            choose: { url, targets, preselect, config in
+                MainActor.assumeIsolated {
+                    Picker.position = config.position
+                    return Picker.choose(for: url, targets: targets, preselect: preselect)
+                }
+            },
+            launch: { try Launcher.open($0, in: $1) },
+            launchPlain: { try Launcher.openPlain($0, app: $1) },
+            notify: { notify($0, subtitle: $1) },
+            shouldReport: { AccessibilityAccess.shouldReport($0) })
     }
 }
 
@@ -210,16 +130,23 @@ func cli(_ args: [String]) -> Int32 {
             let found = targets.contains { $0.matches(reference: r.open) } ? "" : "   (no such target: picker)"
             print("  \(r.hosts.joined(separator: " | "))  ->  \(r.open)\(found)")
         }
+        for w in config.patternWarnings { print("warning: \(w)") }
         return 0
 
     case "--check":
-        guard args.count >= 2, let url = URL(string: args[1]) else {
+        guard args.count >= 2 else {
             FileHandle.standardError.write(Data("usage: browser-picker --check URL\n".utf8))
             return 2
         }
         guard let config = loadConfig() else { return 1 }
+        // The same check the app makes on every link, before any rule.
+        guard let url = webURL(args[1]) else {
+            print("host:   (none)")
+            print("opens:  nothing: rejected, not an http(s) link with a valid host")
+            return 3
+        }
         let host = hostOf(url)
-        print("host:   \(host)")
+        print("host:   \(host ?? "(none)")")
         switch route(host: host, config: config, targets: Discovery.targets(config: config)) {
         case .rule(let r, let t):
             print("rule:   \(r.hosts.joined(separator: " | ")) -> \(r.open)")
@@ -231,6 +158,7 @@ func cli(_ args: [String]) -> Int32 {
             print("rule:   none")
             print("opens:  picker")
         }
+        for w in config.patternWarnings { print("warning: \(w)") }
         return 0
 
     default:

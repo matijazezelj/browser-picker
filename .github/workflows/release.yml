@@ -1,9 +1,16 @@
 # Publish a GitHub Release when a v* tag is pushed: build and test on Apple
-# Silicon, zip the app with ditto, and attach the zip and its SHA-256.
+# Silicon, sign, zip the app with ditto, and attach the zip and its SHA-256.
 #
 #   git tag v1.2.0 && git push origin v1.2.0
 #
 # The tag must match CFBundleShortVersionString in Resources/Info.plist.
+#
+# Signing: with all six APPLE_* secrets set (see "Maintainers: notarized
+# releases" in the README), the app is signed with the Developer ID
+# certificate under the hardened runtime, notarized with notarytool and
+# stapled. With none of them set, it is signed ad hoc as before. Some but not
+# all set is an error, so a half-configured repository never quietly ships an
+# ad-hoc build. The release notes say which one was used.
 name: Release
 
 on:
@@ -20,7 +27,7 @@ jobs:
   release:
     name: Build and publish
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: write # create the release and upload its assets
     env:
@@ -45,13 +52,131 @@ jobs:
       - name: Toolchain
         run: swiftc --version
 
+      # Secrets cannot appear in `if:`, so this step turns "are they set" into
+      # an output. It only tests whether each is empty and never prints one.
+      - name: Choose the signing mode
+        id: mode
+        env:
+          P12: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
+          P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          set_count=0
+          missing=""
+          for name in P12 P12_PASSWORD TEAM_ID API_KEY_ID API_ISSUER_ID API_KEY_P8; do
+            if [ -n "$(printenv "$name")" ]; then
+              set_count=$((set_count + 1))
+            else
+              missing="$missing $name"
+            fi
+          done
+          if [ "$set_count" = 6 ]; then
+            echo "Developer ID signing and notarization: on"
+            echo "developer_id=true" >> "$GITHUB_OUTPUT"
+          elif [ "$set_count" = 0 ]; then
+            echo "No Apple signing secrets: the release is signed ad hoc and not notarized."
+            echo "developer_id=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::only some Apple signing secrets are set; missing:$missing"
+            exit 1
+          fi
+
+      - name: Import the Developer ID certificate
+        if: steps.mode.outputs.developer_id == 'true'
+        env:
+          P12: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
+          P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          umask 077
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          # A keychain for this job only, with a random password, deleted in
+          # the last step. It goes first in the search list so codesign finds
+          # the identity without touching the runner's login keychain.
+          keychain_password=$(openssl rand -hex 24)
+          echo "::add-mask::$keychain_password"
+          security create-keychain -p "$keychain_password" "$KEYCHAIN"
+          security set-keychain-settings -lut 2700 "$KEYCHAIN"
+          security unlock-keychain -p "$keychain_password" "$KEYCHAIN"
+          p12="$RUNNER_TEMP/developer-id.p12"
+          printf '%s' "$P12" | base64 --decode > "$p12"
+          security import "$p12" -k "$KEYCHAIN" -f pkcs12 -P "$P12_PASSWORD" -T /usr/bin/codesign >/dev/null
+          rm -f "$p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$KEYCHAIN" >/dev/null
+          # shellcheck disable=SC2046 # one word per keychain path
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+
+          # Sign by SHA-1, which is not secret and is never ambiguous, and
+          # only with the Developer ID Application identity of this team.
+          identity=$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | grep -F "Developer ID Application:" | grep -F "($TEAM_ID)" | awk 'NR == 1 { print $2 }')
+          if [ -z "$identity" ]; then
+            echo "::error::the certificate holds no valid Developer ID Application identity for the team in APPLE_TEAM_ID"
+            exit 1
+          fi
+          echo "signing with $identity"
+          echo "SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "CODESIGN_FLAGS=--options runtime --timestamp" >> "$GITHUB_ENV"
+
       - name: Build and test
         run: |
-          make build
-          make test
+          # SIGN_IDENTITY and CODESIGN_FLAGS are set by the import step, or
+          # empty for an ad-hoc build.
+          make build SIGN_IDENTITY="${SIGN_IDENTITY:--}" CODESIGN_FLAGS="${CODESIGN_FLAGS:-}"
+          make test SIGN_IDENTITY="${SIGN_IDENTITY:--}" CODESIGN_FLAGS="${CODESIGN_FLAGS:-}"
           archs=$(lipo -archs "$BIN")
           [ "$archs" = arm64 ] || { echo "::error::expected an arm64 binary, got: $archs"; exit 1; }
           codesign --verify --strict --verbose=2 "$APP"
+          codesign --display --verbose=2 "$APP"
+
+      - name: Check the Developer ID signature
+        if: steps.mode.outputs.developer_id == 'true'
+        run: |
+          info=$(codesign --display --verbose=2 "$APP" 2>&1)
+          printf '%s\n' "$info" | grep -q '^Authority=Developer ID Application:' \
+            || { echo "::error::not signed with a Developer ID Application certificate"; exit 1; }
+          printf '%s\n' "$info" | grep -Eq '^CodeDirectory .*flags=0x[0-9a-f]*\(runtime\)' \
+            || { echo "::error::the hardened runtime is not enabled"; exit 1; }
+          printf '%s\n' "$info" | grep -q '^Timestamp=' \
+            || { echo "::error::the signature has no secure timestamp"; exit 1; }
+          codesign --display --entitlements - "$APP" 2>/dev/null \
+            | grep -q 'com.apple.security.automation.apple-events' \
+            || { echo "::error::the apple-events entitlement is missing"; exit 1; }
+
+      - name: Notarize and staple
+        if: steps.mode.outputs.developer_id == 'true'
+        env:
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          umask 077
+          key="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s\n' "$API_KEY_P8" > "$key"
+          upload="$RUNNER_TEMP/notarize.zip"
+          ditto -c -k --keepParent "$APP" "$upload"
+          result="$RUNNER_TEMP/notarize.json"
+          xcrun notarytool submit "$upload" \
+            --key "$key" --key-id "$API_KEY_ID" --issuer "$API_ISSUER_ID" \
+            --wait --timeout 30m --output-format json > "$result" || true
+          status=$(plutil -extract status raw -o - "$result" 2>/dev/null || echo unknown)
+          id=$(plutil -extract id raw -o - "$result" 2>/dev/null || echo "")
+          echo "notarization $id: $status"
+          if [ "$status" != Accepted ]; then
+            if [ -n "$id" ]; then
+              xcrun notarytool log "$id" --key "$key" --key-id "$API_KEY_ID" --issuer "$API_ISSUER_ID" || true
+            fi
+            rm -f "$key"
+            echo "::error::notarization did not succeed (status: $status)"
+            exit 1
+          fi
+          rm -f "$key" "$upload"
+          xcrun stapler staple "$APP"
+          xcrun stapler validate "$APP"
+          spctl --assess --type execute --verbose=2 "$APP"
 
       - name: Package
         run: |
@@ -61,10 +186,23 @@ jobs:
           (cd dist && shasum -a 256 "$zip" > "$zip.sha256" && cat "$zip.sha256")
 
       - name: Write the release notes
+        env:
+          DEVELOPER_ID: ${{ steps.mode.outputs.developer_id }}
         run: |
-          cat > "$RUNNER_TEMP/notes.md" <<NOTES
-          Browser Picker $VERSION for Apple Silicon Macs (macOS 14 or later).
+          notes="$RUNNER_TEMP/notes.md"
+          echo "Browser Picker $VERSION for Apple Silicon Macs (macOS 14 or later)." > "$notes"
+          echo >> "$notes"
+          if [ "$DEVELOPER_ID" = true ]; then
+            cat >> "$notes" <<NOTES
+          **This build is signed with a Developer ID certificate and notarized by
+          Apple**, with the ticket stapled to the app. Unzip it, move
+          \`Browser Picker.app\` to \`~/Applications\` and open it once.
 
+          Because the signature stays the same from release to release, the
+          Accessibility and Automation grants carry over when you upgrade.
+          NOTES
+          else
+            cat >> "$notes" <<NOTES
           **This build is ad-hoc signed and not notarized.** macOS quarantines
           downloaded apps and will refuse to open it. After unzipping, either
           clear the quarantine flag:
@@ -73,7 +211,12 @@ jobs:
           xattr -dr com.apple.quarantine "Browser Picker.app"
           \`\`\`
 
-          or build it from source with \`make install\` (see the README).
+          or build it from source with \`make install\` (see the README). An
+          ad-hoc signature is new with every build, so after an upgrade allow
+          Browser Picker under Accessibility again.
+          NOTES
+          fi
+          cat >> "$notes" <<NOTES
 
           Check the download against the checksum before you open it:
 
@@ -81,6 +224,7 @@ jobs:
           shasum -a 256 -c Browser-Picker-$VERSION-arm64.zip.sha256
           \`\`\`
           NOTES
+          cat "$notes"
 
       - name: Publish the release
         env:
@@ -91,3 +235,9 @@ jobs:
             --verify-tag \
             --title "Browser Picker $VERSION" \
             --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: Remove the signing keychain
+        if: always() && steps.mode.outputs.developer_id == 'true'
+        run: |
+          rm -f "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP/AuthKey.p8"
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true

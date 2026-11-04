@@ -29,8 +29,7 @@ enum Picker {
         // within each group is Discovery's (the config's include order).
         let regular = targets.filter { $0.kind != .privateWindow }
         let privates = targets.filter { $0.kind == .privateWindow }
-        let host = hostOf(url)
-        var rows: [MenuView.Row] = [.header(host.isEmpty ? url.absoluteString : host), .separator]
+        var rows: [MenuView.Row] = [.header(hostOf(url) ?? url.absoluteString), .separator]
         for target in regular { rows.append(.item(target)) }
         if !regular.isEmpty && !privates.isEmpty { rows.append(.separator) }
         for target in privates { rows.append(.item(target)) }

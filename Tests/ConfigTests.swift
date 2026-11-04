@@ -1,11 +1,12 @@
-// Browser Picker -- config tests. No XCTest (plain swiftc, no SwiftPM): a
-// main that runs every assertion and exits non-zero if any failed.
+// Browser Picker -- config tests, and the main that runs every suite
+// (HostTests, RouterTests). No XCTest (plain swiftc, no SwiftPM): a main that
+// runs every assertion and exits non-zero if any failed.
 //
 //   make test
 //
 // which amounts to
 //
-//   swiftc Sources/Model.swift Sources/Config.swift Tests/ConfigTests.swift -o build/config-tests
+//   swiftc Sources/{Model,Config,Host,Router}.swift Tests/*.swift -o build/config-tests
 //   build/config-tests config.example.toml
 //
 // With a path, it also parses that file and checks the example rules.
@@ -16,12 +17,7 @@ import Foundation
 // in a file named main.swift.
 @main
 enum ConfigTests {
-    nonisolated(unsafe) static var failures = 0
-
     static func main() {
-        func check(_ ok: Bool, _ what: String, line: Int = #line) {
-            if !ok { ConfigTests.failures += 1; print("FAIL line \(line): \(what)") }
-        }
 
         /// Parsing `text` must fail with a syntax error on `line` whose message
         /// contains `contains`.
@@ -202,10 +198,13 @@ enum ConfigTests {
             }
         }
 
-        if failures > 0 {
-            print("\(failures) failed")
+        HostTests.run()
+        RouterTests.run()
+
+        if testFailures > 0 {
+            print("\(testFailures) failed")
             exit(1)
         }
-        print("all config tests passed")
+        print("all config, host and router tests passed")
     }
 }

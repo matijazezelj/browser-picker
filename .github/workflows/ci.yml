@@ -51,6 +51,69 @@ jobs:
           codesign --verify --strict --verbose=2 "$APP"
           codesign --display --verbose=2 "$APP"
 
+      - name: No network code
+        # SECURITY.md ("What CI checks") says what this proves and what not.
+        # In short: it catches networking that the app's own code links or
+        # names (URLSession, Network.framework, sockets, DNS, a hard-coded
+        # endpoint, an unexpected helper tool). It cannot see inside the
+        # system frameworks the app uses, nor inside the tools it runs, and a
+        # determined author could get past it; it is a tripwire for honest
+        # mistakes and a quick check for readers, not a proof.
+        run: |
+          fail=0
+          err() { echo "::error::$*"; fail=1; }
+          flat() { echo "$1" | tr "\n" " "; }
+
+          # 1. Libraries the binary links directly. AppKit and Foundation
+          #    load CFNetwork themselves, so it is only the direct list that
+          #    can be checked.
+          linked=$(otool -L "$BIN" | awk '/^[[:space:]]/ {print $1}' | sort -u)
+          echo "Linked:"; echo "$linked" | awk '{print "  " $0}'
+          bad=$(echo "$linked" | grep -E '/(Network|CFNetwork|NetworkExtension|WebKit|CloudKit|MultipeerConnectivity|SystemConfiguration)\.framework/|/lib(curl|network)[.]' || true)
+          [ -z "$bad" ] || err "links a networking library: $(flat "$bad")"
+
+          # 2. Symbols the binary imports: URL loading, Bonjour, streams to
+          #    hosts, Network.framework (nw_*), BSD sockets and DNS, and the
+          #    dynamic lookups (dlopen, NSClassFromString, ...) that would let
+          #    code reach any of those without importing them by name.
+          #    Swift's bridged URLSession API shows up as NSURLSession inside
+          #    mangled names, hence the unanchored first line.
+          syms=$(nm -u -j "$BIN" | sort -u)
+          bad=$(echo "$syms" | grep -E \
+            -e 'NSURLSession|NSURLConnection|NSURLDownload|NSURLRequest|NSURLCache|NSHTTPCookie|NSNetService|WKWebView' \
+            -e '^_OBJC_CLASS_[$]_(NSHost|NSStream|NSInputStream|NSOutputStream|NSSocketPort|WebView)$' \
+            -e '^_nw_|^_sec_protocol_|^_SCNetwork|^_DNSService' \
+            -e '^_CF(Socket|Stream|HTTP|Host|NetService|FTP|Network)' \
+            -e '^_(socket|connect|bind|listen|accept|sendto|sendmsg|recvfrom|recvmsg)$' \
+            -e '^_(getaddrinfo|getnameinfo|gethostbyname2?|gethostbyaddr|res_9_query|res_query)$' \
+            -e '^_(dlopen|dlsym|NSClassFromString|objc_getClass|objc_lookUpClass)$' \
+            || true)
+          [ -z "$bad" ] || err "imports network or dynamic-lookup symbols: $(flat "$bad")"
+
+          # 3. The sources. Short Swift strings live in the code, not in the
+          #    binary's string table, so these are read from Sources/.
+          #    Helper tools: only these two. open(1) hands the link to a
+          #    browser through LaunchServices; osascript posts notifications.
+          tools=$(grep -rhoE '"/(usr/)?s?bin/[^"]*"' Sources | tr -d '"' | sort -u)
+          echo "Tools the sources name:"; echo "$tools" | awk '{print "  " $0}'
+          bad=$(echo "$tools" | grep -vxE '/usr/bin/open|/usr/bin/osascript' || true)
+          [ -z "$bad" ] || err "names an unexpected tool (update SECURITY.md if it is meant): $(flat "$bad")"
+          #    AppleScript that runs a shell or fetches a URL.
+          bad=$(grep -rnE 'do shell script|open location|URL access' Sources || true)
+          [ -z "$bad" ] || err "AppleScript runs a shell or opens a URL: $bad"
+          #    A URL literal is how an endpoint would get in. Allowed: a bare
+          #    scheme ("https://"), and hosts under the reserved names of
+          #    RFC 2606 (example.com/org/net, .example, .test, .invalid,
+          #    .localhost), which nothing can be fetched from. The host is
+          #    what follows the last @, as in "https://a.example@b.example/".
+          bad=$(grep -rnoE '"[A-Za-z][A-Za-z0-9+.-]*://[^"]*"' Sources \
+            | grep -vE '://(([A-Za-z0-9.@-]*[.@])?(example\.(com|org|net)|example|test|invalid|localhost))?(:[0-9]*)?([/?#][^"]*)?"$' \
+            || true)
+          [ -z "$bad" ] || err "has a URL literal outside the reserved example domains: $bad"
+
+          [ "$fail" = 0 ] && echo "no network code found"
+          exit "$fail"
+
       - name: CLI smoke test
         run: |
           # Point the app at the example config, not anything on the runner.

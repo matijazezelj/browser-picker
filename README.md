@@ -35,8 +35,11 @@ It is written in Swift with no dependencies and builds with plain `swiftc`.
   and always get the menu.
 - **Fallback**: when anything goes wrong (a broken config, a browser that
   will not start, a missing permission), the link opens in your `fallback`
-  browser and a notification says why. A broken picker costs you the choice,
-  never the link.
+  browser and a notification says why and where it went. A browser that
+  failed is not tried again: when it is the `fallback` itself, the fallback
+  browser is opened without a profile, then Safari; if nothing opens, the
+  notification says so. A broken picker costs you the choice, never the link
+  (cancelling the menu is the one way a link is dropped, on purpose).
 - `--list` and `--check URL` show, from a terminal, what the picker sees and
   what a given link would do.
 
@@ -74,7 +77,8 @@ Make variables:
 |---|---|---|
 | `PREFIX` | `~/Applications` | where `make install` puts the app, e.g. `PREFIX=/Applications` |
 | `ARCH` | this Mac's | architectures to build; `ARCH="arm64 x86_64"` makes a universal binary |
-| `SIGN_IDENTITY` | `-` (ad-hoc) | a codesign identity, e.g. `"Apple Development: …"` |
+| `SIGN_IDENTITY` | `"Browser Picker Local"` if the keychain has it, else `-` (ad hoc) | a codesign identity; see [Keeping the grants across rebuilds](#keeping-the-grants-across-rebuilds) |
+| `CODESIGN_FLAGS` | none | extra `codesign` flags, e.g. `"--options runtime --timestamp"` (the release workflow uses these) |
 
 Other targets: `make build` (to `./build/Browser Picker.app`), `make test`,
 `make clean`.
@@ -85,9 +89,16 @@ Each [release](https://github.com/matijazezelj/browser-picker/releases) has
 a zipped app for Apple silicon, built and tested by GitHub Actions, and its
 SHA-256. On Intel, build from source as above.
 
-The release build is **ad-hoc signed and not notarized** (there is no Apple
-developer identity behind it), so macOS quarantines the download and refuses
-to open it. Check the zip, unpack it, and clear the quarantine flag:
+Each release's notes say how it was signed. The release workflow signs with a
+Developer ID certificate and notarizes the app when the repository has the
+signing secrets (see [Maintainers: notarized releases](#maintainers-notarized-releases)).
+A notarized build opens like any downloaded app: unzip it, move it to
+`~/Applications`, open it once. Its signature stays the same from release to
+release, so the grants carry over when you upgrade.
+
+Until then, a release build is **ad-hoc signed and not notarized** (no
+Apple developer identity is behind it), so macOS quarantines the download and
+refuses to open it. Check the zip, unpack it, and clear the quarantine flag:
 
 ```sh
 cd ~/Downloads
@@ -103,8 +114,8 @@ build, install from source instead. Then choose Browser Picker under
 **System Settings › Desktop & Dock › Default web browser**, copy
 [`config.example.toml`](config.example.toml) to
 `~/.config/browser-picker/config.toml`, and grant **Accessibility** when
-asked. Every release is signed afresh, so after an upgrade switch Browser
-Picker back on under Accessibility (see
+asked. An ad-hoc release is signed afresh each time, so after an upgrade to
+one, switch Browser Picker back on under Accessibility (see
 [Rebuilding drops the grants](#rebuilding-drops-the-grants)).
 
 ### Uninstall
@@ -199,21 +210,65 @@ supported.
 ### Host globs
 
 `hosts` patterns are sh-style globs ([`fnmatch(3)`]), matched against the
-**bare host only**: lowercased, without scheme, user, port, path or query.
-`https://user@Wiki.Example.com:8443/page?q=x` is matched as
-`wiki.example.com`. Only the host counts because a word in a path or query
-string says nothing about who owns the link.
+**bare host only**: no scheme, user, port, path or query. Only the host
+counts because a word in a path or query string says nothing about who owns
+the link.
+
+The link's host and every pattern are put into the same canonical form
+before they are compared:
+
+| | Canonical form | So these are all the same |
+|---|---|---|
+| case | lowercase | `Wiki.Example.COM`, `wiki.example.com` |
+| IDNs | punycode (`xn--`), per label | `bücher.example`, `BÜCHER.example`, `b%C3%BCcher.example`, `xn--bcher-kva.example` |
+| trailing dot | stripped | `example.com.`, `example.com` |
+| port, userinfo | stripped | `https://user@example.com:8443/` is `example.com` |
+| IPv6 | without brackets | `[2001:db8::1]`, `2001:db8::1` |
+| percent-escapes | decoded, as browsers do | `ex%41mple.com` is `example.com` |
+
+A rule may be written in either IDN form and matches links in either form.
+Punycode is the canonical form so that `?` is always one character, and so
+`--check` shows the name the browser connects to, which is also the one that
+gives away a look-alike (homograph) host.
+
+The userinfo ends at the **last** `@` before the first `/`, `\`, `?` or
+`#`, as in a browser: `https://trusted.example@evil.example/` goes to, and
+is matched as, `evil.example`.
+
+**Only `http` and `https` links with a valid host are opened at all.**
+Anything else is rejected before any rule or the menu: nothing opens, and a
+notification says "Ignored a link that is not an http or https address"
+without repeating the text. That covers:
+
+- other schemes: `javascript:`, `file:`, `data:`, `mailto:`, `ftp:`, …;
+- text with no scheme, such as `--renderer-cmd-prefix=…`, which a Chromium
+  or Firefox command line would otherwise read as a switch;
+- a host that is not valid once decoded:
+  `https://trusted.example%40evil.example/` (`@` is not a host character),
+  empty hosts and labels (`https://`, `https://.example.com`), spaces and a
+  non-numeric port.
+
+Files macOS hands the default browser (`.html` from the Finder) are opened
+with the file URL through LaunchServices, in the `fallback` browser or else
+Safari. They are never put on a browser's command line. IPv4 addresses are
+compared as written: `192.0.2.1` does not match the browser-equivalent
+`3221225985`.
 
 | Pattern | Matches | Does not match |
 |---|---|---|
-| `example.com` | `example.com` | `www.example.com` |
-| `*.example.com` | `www.example.com`, `a.b.example.com` | `example.com`, `notexample.com` |
+| `example.com` | `example.com`, `EXAMPLE.com.` | `www.example.com` |
+| `*.example.com` | `www.example.com`, `a.b.example.com` | `example.com`, `badexample.com` |
+| `*example.com` | `example.com`, `www.example.com`, **`badexample.com`** | |
 | `*example*` | any host containing `example` | |
-| `*` | everything (useful as a last, catch-all rule) | |
+| `bücher.example` | `bücher.example`, `xn--bcher-kva.example` | |
+| `2001:db8::1` or `[2001:db8::1]` | `http://[2001:db8::1]:8080/` | |
+| `*` | every http(s) link with a valid host (a last, catch-all rule) | nothing else ever reaches the rules |
 | `?`, `[abc]` | one character; one of a set | |
 
 `*` crosses dots. `*.example.com` does **not** match `example.com` itself,
-so list both. Patterns are lowercased when read, so case does not matter.
+so list both. `*example.com` without the dot is almost always a mistake: it
+also matches `badexample.com`, so `--list` and `--check` print a warning for
+it.
 
 [`fnmatch(3)`]: https://man.freebsd.org/cgi/man.cgi?query=fnmatch&sektion=3
 
@@ -327,26 +382,122 @@ macOS asks for these the first time they are needed:
 
 Without Accessibility, links can still go to Safari profiles that already
 have a window open, and to every other browser; only opening a *new* Safari
-profile or private window needs it. Browser Picker asks for it at the moment
-it is first needed, which also adds it to the Accessibility list, switched
-off, for you to switch on.
+profile or private window needs it. The first time a link needs it, Browser
+Picker adds itself to the Accessibility list (switched off), opens System
+Settings at **Privacy & Security › Accessibility**, and posts one
+notification. The link still opens, in the `fallback` browser. Later links
+that need the grant fall back quietly until you switch it on. You get the
+notice again only after the app's signature changes.
 
 Chromium, Firefox and plain browsers need no permissions.
 
 ### Rebuilding drops the grants
 
-macOS ties these grants to the app's code signature. `make` signs ad hoc
-(there is no developer identity to sign with), and every ad-hoc signature is
-new, so after a rebuild macOS no longer recognises the app it gave the grants
-to. It then usually refuses silently rather than asking again.
+macOS stores each grant with the app's **designated requirement**, the rule
+a later copy of the app must satisfy to count as the same app. What that rule
+says depends on how the app was signed:
 
-So `make install` only replaces the installed app when the sources actually
-changed (it compares a checksum stored in the bundle), and when it does
-replace it, it resets the old Automation and Accessibility grants with
-`tccutil reset` so macOS asks again. After an upgrade, **switch Browser Picker
-back on under Accessibility**. Signing with a real identity
-(`make install SIGN_IDENTITY="Apple Development: …"`) keeps the grants across
-rebuilds.
+| Signed with | Designated requirement | After a rebuild |
+|---|---|---|
+| ad hoc (`SIGN_IDENTITY=-`) | `cdhash H"…"`: the hash of this exact build | a different app; the grants no longer apply |
+| a certificate | `identifier "local.browser-picker" and certificate …`: the bundle ID and the certificate | the same app; the grants still apply |
+
+So with ad-hoc signing, every rebuild is a stranger to macOS. The app still
+shows as switched on under Accessibility, but the switch now belongs to the
+old build, and macOS usually refuses silently instead of asking again.
+
+`make install` therefore only replaces the installed app when the sources
+changed (it compares a checksum stored in the bundle). When it does, it
+compares the old and new designated requirements and resets the Automation
+and Accessibility grants with `tccutil reset` only if they differ, so that
+macOS asks again. With ad-hoc signing that happens on every upgrade:
+**switch Browser Picker back on under Accessibility** afterwards. `make`
+prints a warning whenever it signs ad hoc.
+
+Browser Picker also notices this case at run time, as far as it can. It
+remembers the designated requirement it last had the grant under. When the
+grant is missing and the requirement has changed since, the notification says
+the grant went stale and to remove the app from the list and switch it on
+again. The privacy database itself is readable only with Full Disk Access, so
+this is an inference: it cannot tell a stale grant from one you switched off
+after a rebuild.
+
+### Keeping the grants across rebuilds
+
+Sign with a certificate, and the designated requirement stays the same from
+build to build. Without an Apple developer account, a self-signed certificate
+that lives only in your keychain does the job:
+
+```sh
+scripts/create-signing-identity.sh   # once: creates "Browser Picker Local"
+make install                         # signs with it from now on
+```
+
+The script creates a key and a self-signed certificate restricted to code
+signing (valid for ten years) with `/usr/bin/openssl`, imports them into your
+login keychain, lets `codesign` use the key, and marks the certificate as
+trusted for code signing for your user. `codesign` refuses an untrusted
+identity, and macOS asks for your password for that last step. It does
+nothing if the identity already exists; `--dry-run` shows what it would do,
+and `--help` lists the options. The certificate is good only for signing on
+this Mac. Gatekeeper does not accept it on downloaded apps, so it is no
+substitute for a Developer ID.
+
+`make` picks up a valid identity named `Browser Picker Local` by itself; pass
+`SIGN_IDENTITY="…"` to use another one (an `Apple Development` or Developer ID
+certificate works too). The first install with the new identity changes the
+designated requirement, so allow Browser Picker under Accessibility one more
+time; later rebuilds keep the grant. The first build may also ask whether
+`codesign` may use the key: choose **Always Allow**.
+
+To remove it, drop the trust setting, then the key and certificate:
+
+```sh
+security find-certificate -c "Browser Picker Local" -p > bp.pem
+security remove-trusted-cert bp.pem && rm bp.pem
+security delete-identity -c "Browser Picker Local"
+```
+
+## Privacy
+
+Browser Picker sees every web link you open, so it is built to do as little
+with them as it can:
+
+- **No network access, no telemetry.** It never makes a connection of its
+  own: no analytics, no update checks, no crash reporter. The browser you
+  pick loads the page. CI fails the build if the binary links a networking
+  framework or imports networking symbols; [SECURITY.md](SECURITY.md#what-ci-checks)
+  says exactly what that check covers and what it cannot.
+- **No history.** Links are not written to disk or to a log. The app has no
+  log of its own.
+- **What it stores**, in `~/Library/Preferences/local.browser-picker.plist`:
+  the title of your last pick (such as `Safari: Work`; never a private
+  window) and the Safari profile names last read from Safari's File menu.
+  `defaults delete local.browser-picker` clears both.
+- **What it reads**: your config, the profile *names* in Chromium's
+  `Local State` and Firefox's `profiles.ini`, Safari's File menu, and the
+  titles of Safari's windows (to see which profiles have one open; used in
+  memory, never stored).
+
+Where a link can still show up: links opened in a Chromium or Firefox
+profile or private window are passed on the command line of `open` and the
+browser (`open -na … --args <link>`), which other processes of your user,
+and endpoint-security tools that record command lines, can see. Error
+notifications name the link's **host only**, never its path or query. Their
+text goes to `osascript` on its standard input, not its command line. macOS
+keeps them in Notification Center until you clear them.
+
+What the grants allow (see [Permissions](#permissions)):
+
+- **Automation › Safari** lets it script Safari: open tabs and windows, set
+  their URL and read window titles. It does only the first and the last.
+- **Automation › System Events** lets it script other apps' user interface
+  through System Events. It clicks Safari's File menu items, nothing else.
+- **Accessibility** lets an app read and operate the user interface of any
+  app. Browser Picker reads and clicks Safari's File menu, nothing else. If
+  you don't use Safari profiles you can leave it switched off.
+
+To report a security problem, see [SECURITY.md](SECURITY.md).
 
 ## Known limitations
 
@@ -364,7 +515,8 @@ rebuilds.
   panel in every situation has not been confirmed. The mouse always works.
 - A Safari profile name containing " — " confuses window-title matching.
 - `.html` files opened with the default browser go straight to the fallback
-  browser; only `http`/`https` links get rules and the menu.
+  browser, opened plainly (no profile); only `http`/`https` links get rules
+  and the menu.
 - There is no menu bar icon or settings window: the config file is the
   interface.
 
@@ -378,6 +530,9 @@ notification says why. For a config error, run
 matched against, the rule, and the target. `(no such target)` means the
 reference does not match anything in `"$bp" --list`; copy the REFERENCE
 column. Remember that `*.example.com` does not match `example.com`.
+`opens: nothing: rejected` (exit status 3) means the link is not http(s)
+or its host is invalid, so the app would ignore it (see
+[Host globs](#host-globs)).
 
 **Safari profiles are missing from the menu.** Open Safari once with
 Accessibility granted, so the profile list can be read and cached.
@@ -385,9 +540,11 @@ Accessibility granted, so the profile list can be read and cached.
 **"No Accessibility access" or "Not allowed to control Safari".** Grant
 the permission named in the notification (see [Permissions](#permissions)).
 If Browser Picker is already switched on but it still fails after an
-upgrade, select it in the list, remove it with **−**, and open a link again
-so macOS asks afresh, or run
-`tccutil reset Accessibility local.browser-picker`.
+upgrade (the notification then says the grant went stale), the switch belongs
+to the previous build: select it in the list, remove it with **−**, and open a
+link again so macOS asks afresh, or run
+`tccutil reset Accessibility local.browser-picker`. To stop this happening on
+every rebuild, see [Keeping the grants across rebuilds](#keeping-the-grants-across-rebuilds).
 
 **Browser Picker is not offered as a default browser.** Register it with
 LaunchServices and try again:
@@ -416,9 +573,15 @@ starts it again.
 | `Sources/Discovery.swift` | finds browsers (LaunchServices) and their profiles |
 | `Sources/Launcher.swift` | opens a URL in a target, per browser family |
 | `Sources/Picker.swift` | the menu: a borderless, non-activating `NSPanel` |
-| `Sources/main.swift` | URL events, routing, the fallback chain and the CLI |
-| `Tests/ConfigTests.swift` | config parser and matching tests |
+| `Sources/Host.swift` | the canonical host of a link and of a rule pattern (punycode, userinfo, ports) |
+| `Sources/Router.swift` | routing and the fallback chain, with the system passed in as closures |
+| `Sources/main.swift` | URL events, wiring the router to the system, and the CLI |
+| `Tests/ConfigTests.swift` | config parser tests, and the `main` that runs every suite |
+| `Tests/HostTests.swift` | host extraction and matching: IDNs, userinfo tricks, IP literals, malformed links, wildcard boundaries |
+| `Tests/RouterTests.swift` | every routing and failure path, with a fake launcher |
 | `scripts/set-default-browser.swift` | sets the default `http`/`https` handler |
+| `scripts/create-signing-identity.sh` | creates the local self-signed signing identity |
+| `Resources/BrowserPicker.entitlements` | the Apple Events entitlement for hardened-runtime builds |
 
 The menu is not an `NSMenu`: since macOS 14 an app is activated only
 cooperatively, and a default browser launched by a click in another app is
@@ -435,19 +598,70 @@ profiles) is kept in the `local.browser-picker` defaults domain.
 Issues and pull requests are welcome. Most useful right now: reports from
 Firefox-family browsers, non-English Safari, and keyboard use in the menu.
 
-- `make test` runs the config tests (no XCTest needed; it is a plain
-  executable that exits non-zero on failure). It also checks that the bundle
+- `make test` runs the config, host-matching and routing tests (no XCTest
+  needed; it is a plain executable that exits non-zero on failure). The
+  routing tests drive `Router` with a fake launcher, so a new failure path
+  gets a test without a browser. It also checks that the bundle
   ID in `Resources/Info.plist` and `Sources/Model.swift` agree.
 - `make build` and run the CLI against a scratch config:
   `XDG_CONFIG_HOME=/tmp/bp-test build/Browser\ Picker.app/Contents/MacOS/BrowserPicker --list`.
 - CI runs the same `make build` and `make test` on every pull request, then
   checks the bundle (arm64, `plutil -lint`, `codesign --verify`) and runs
-  `--version`, `--list` and `--check` against `config.example.toml`.
+  `--version`, `--list` and `--check` against `config.example.toml`. It
+  also fails on network code (see [SECURITY.md](SECURITY.md#what-ci-checks)):
+  the app must not open connections of its own.
 - Keep it dependency-free and buildable with plain `swiftc`.
 - A browser that should get profiles but does not: open an issue with its
   bundle ID (`osascript -e 'id of app "Name"'`) and where it keeps its
   profiles.
 - Note changes in [`CHANGELOG.md`](CHANGELOG.md).
+
+## Maintainers: notarized releases
+
+[`release.yml`](.github/workflows/release.yml) signs with a Developer ID
+certificate and notarizes when the repository has all six of these Actions
+secrets (**Settings › Secrets and variables › Actions**). With none of them
+it builds ad hoc, as before. With only some of them it fails, rather than
+quietly shipping an ad-hoc build.
+
+| Secret | What it is |
+|---|---|
+| `APPLE_DEVELOPER_ID_P12` | the **Developer ID Application** certificate and its private key, exported as `.p12`, base64-encoded |
+| `APPLE_DEVELOPER_ID_P12_PASSWORD` | the password the `.p12` was exported with |
+| `APPLE_TEAM_ID` | the ten-character Team ID; the job signs only with an identity of this team |
+| `APPLE_API_KEY_ID` | the App Store Connect API key's Key ID |
+| `APPLE_API_ISSUER_ID` | the Issuer ID shown above the API keys list |
+| `APPLE_API_KEY_P8` | the contents of the downloaded `AuthKey_<id>.p8` file |
+
+Setting them up (needs a paid Apple Developer Program membership):
+
+1. Create a **Developer ID Application** certificate (Xcode › Settings ›
+   Accounts › Manage Certificates, or developer.apple.com). In Keychain Access,
+   export the certificate *with its private key* as a `.p12` with a strong
+   password, then `base64 -i DeveloperID.p12 | pbcopy` and paste it as
+   `APPLE_DEVELOPER_ID_P12`. Delete the `.p12` file afterwards.
+2. In App Store Connect › Users and Access › Integrations › App Store
+   Connect API, create a team key with the **Developer** role. Download the
+   `.p8` (it can be downloaded only once) and paste its contents as
+   `APPLE_API_KEY_P8`, with the Key ID and Issuer ID.
+3. Set the secrets with `gh secret set NAME` (it reads the value from
+   stdin, so nothing lands in the shell history) or in the web settings.
+
+What the job does with them: it imports the `.p12` into a temporary keychain
+with a random password, and builds with
+`SIGN_IDENTITY=<certificate SHA-1>` and
+`CODESIGN_FLAGS="--options runtime --timestamp"`, that is, the hardened
+runtime plus the `com.apple.security.automation.apple-events` entitlement
+the AppleScript needs. It checks the signature, sends the app to
+`xcrun notarytool submit --wait` (on rejection it prints Apple's log),
+staples the ticket with `xcrun stapler staple`, checks it with `spctl`, and
+deletes the keychain and key files at the end, even when a step failed.
+Secrets reach only the steps that need them, as environment variables, and
+are never echoed. The release notes say whether a build is notarized or
+ad hoc.
+
+Rotating the certificate changes the designated requirement, so users
+allow Browser Picker under Accessibility once more after that release.
 
 ## License
 

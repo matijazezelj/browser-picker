@@ -106,11 +106,27 @@ extension Config {
 
     /// First rule with a glob matching the host. Globs are fnmatch(3)
     /// patterns, as in a sh `case`, so "*.slack.com" does not match
-    /// "slack.com" itself.
+    /// "slack.com" itself. Host and patterns are both put into the canonical
+    /// form of HostName (Host.swift) first: lowercase, punycode, no trailing dot, so
+    /// "Bücher.Example." and "xn--bcher-kva.example" are the same host.
     func rule(forHost host: String) -> Rule? {
-        let bare = host.lowercased()
+        guard let bare = HostName.canonical(host) else { return nil }
         return rules.first { rule in
-            rule.hosts.contains { fnmatch($0, bare, 0) == 0 }
+            rule.hosts.contains { fnmatch(HostName.pattern($0), bare, 0) == 0 }
+        }
+    }
+
+    /// Patterns that probably do not mean what they say: "*example.com"
+    /// also matches "badexample.com". Shown by --list and --check.
+    var patternWarnings: [String] {
+        rules.flatMap(\.hosts).compactMap { p in
+            guard p.hasPrefix("*"), let second = p.dropFirst().first, second != ".",
+                  !"*?[".contains(second), p.dropFirst().contains("."),
+                  !p.dropFirst().contains(where: { "*?[".contains($0) })
+            else { return nil }
+            let domain = p.dropFirst()
+            return "\"\(p)\" also matches hosts such as \"bad\(domain)\"; "
+                + "for \(domain) and its subdomains use \"\(domain)\" and \"*.\(domain)\""
         }
     }
 }

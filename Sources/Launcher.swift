@@ -12,18 +12,24 @@
 
 import AppKit
 import ApplicationServices
+import Security
 
 enum LaunchError: Error, CustomStringConvertible {
     case appleScript(String)
-    case noAccessibility
+    /// stale: the grant was given to an earlier signature of this app.
+    case noAccessibility(stale: Bool)
     case launchFailed(String)
 
     var description: String {
         switch self {
         case .appleScript(let m): return m
-        case .noAccessibility:
+        case .noAccessibility(stale: false):
             return "No Accessibility access, so it could not open a new Safari window. "
                 + "Allow Browser Picker in System Settings > Privacy & Security > Accessibility."
+        case .noAccessibility(stale: true):
+            return "Browser Picker was rebuilt or updated since you allowed it, and macOS no longer "
+                + "recognises that grant. In System Settings > Privacy & Security > Accessibility, "
+                + "remove Browser Picker with \u{2212} and switch it on again."
         case .launchFailed(let m): return m
         }
     }
@@ -33,7 +39,10 @@ enum Launcher {
     // Safari titles windows "<Profile> — <page>" once more than one profile exists.
     static let titleSeparator = " — "
 
+    /// Only for a validated http(s) link (Router checks at the entry point;
+    /// this checks again). Files go through openPlain alone.
     static func open(_ url: URL, in target: Target) throws {
+        _ = try LaunchArguments.url(url)
         switch target.kind {
         case .safariProfile(let name):
             try openSafariProfile(name, url: url)
@@ -47,18 +56,17 @@ enum Launcher {
             case .safari:
                 try openSafariWindow(menuItem: "New Private Window", url: url)
             case .chromium:
-                // Edge calls it InPrivate and has its own flag for it.
-                let flag = target.bundleID.lowercased().hasPrefix("com.microsoft.edgemac") ? "--inprivate" : "--incognito"
-                try launchNew(target.appURL, args: [flag, url.absoluteString])
+                let edge = target.bundleID.lowercased().hasPrefix("com.microsoft.edgemac")
+                try launchNew(target.appURL, args: LaunchArguments.privateWindow(.chromium(edge: edge), url: url))
             case .firefox:
-                try launchNew(target.appURL, args: ["-private-window", url.absoluteString])
+                try launchNew(target.appURL, args: LaunchArguments.privateWindow(.firefox, url: url))
             case .plain:
                 throw LaunchError.launchFailed("\(target.browserName) has no private window Browser Picker knows how to open.")
             }
         case .chromiumProfile(let dir, _):
-            try launchNew(target.appURL, args: ["--profile-directory=\(dir)", url.absoluteString])
+            try launchNew(target.appURL, args: LaunchArguments.chromiumProfile(directory: dir, url: url))
         case .firefoxProfile(let name):
-            try launchNew(target.appURL, args: ["-P", name, "-new-tab", url.absoluteString])
+            try launchNew(target.appURL, args: LaunchArguments.firefoxProfile(name: name, url: url))
         }
     }
 
@@ -145,10 +153,8 @@ enum Launcher {
     /// there. Relies on the File menu's English item names.
     static func openSafariWindow(menuItem: String, url: URL) throws {
         // Ask up front: a System Events click without the grant fails with an
-        // error that names neither the app nor the fix. The prompt also puts
-        // Browser Picker into the Accessibility list, ready to switch on.
-        let prompt = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
-        guard AXIsProcessTrustedWithOptions(prompt) else { throw LaunchError.noAccessibility }
+        // error that names neither the app nor the fix.
+        try AccessibilityAccess.require()
 
         _ = try runAppleScript("""
             set theURL to \(literal(url.absoluteString))
@@ -228,13 +234,102 @@ private final class ErrorBox: @unchecked Sendable {
     var message: String?
 }
 
+/// Onboarding for the one grant macOS does not ask for by itself.
+///
+/// Without Accessibility every Safari new-window link falls back, and the
+/// caller notifies about each failure. Once per code signature, this opens
+/// System Settings at the Accessibility list and lets one notification
+/// through; later failures fall back quietly until the grant is given.
+///
+/// macOS keys the grant by the designated requirement (DR) of the signature
+/// that was allowed. An ad-hoc DR is the cdhash, so a rebuild no longer
+/// matches: the app still shows switched on in the list, but
+/// AXIsProcessTrusted() is false. The privacy database that would show the
+/// stale entry is readable only with Full Disk Access, so that case cannot be
+/// seen directly. Instead the DR is remembered whenever the grant works; when
+/// the grant is missing and the DR differs from that one, the grant is
+/// almost certainly stale rather than switched off. It cannot tell a grant
+/// the user revoked after a rebuild apart from a stale one, and it knows
+/// nothing about grants given before this check existed (0.2.0).
+enum AccessibilityAccess {
+    /// Privacy & Security > Accessibility. This form is System Settings'
+    /// (macOS 13 and later); the older com.apple.preference.security pane ID
+    /// is the System Preferences one.
+    static let settingsURL = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility")!
+
+    private static let trustedKey = "accessibilityTrustedRequirement"
+    private static let announcedKey = "accessibilityAnnouncedRequirement"
+    /// Set when require() has just announced; shouldReport() lets that one
+    /// failure be reported, once.
+    nonisolated(unsafe) private static var announcing = false
+
+    static func require() throws {
+        let defaults = UserDefaults.standard
+        let me = designatedRequirement() ?? "unknown"
+        if AXIsProcessTrusted() {
+            defaults.set(me, forKey: trustedKey)
+            defaults.removeObject(forKey: announcedKey)
+            return
+        }
+        let stale = defaults.string(forKey: trustedKey).map { $0 != me } ?? false
+        if defaults.string(forKey: announcedKey) != me {
+            defaults.set(me, forKey: announcedKey)
+            announcing = true
+            // The prompt puts Browser Picker into the Accessibility list,
+            // switched off, so there is an entry to switch on.
+            _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+            NSWorkspace.shared.open(settingsURL)
+        }
+        throw LaunchError.noAccessibility(stale: stale)
+    }
+
+    /// Whether a failure should be reported (Router.shouldReport): every
+    /// error except the missing-Accessibility one, and that one only right
+    /// after require() announced it. Keyed on the error case, not on the
+    /// notification text, which the router prefixes and joins.
+    static func shouldReport(_ error: Error) -> Bool {
+        guard case LaunchError.noAccessibility = error else { return true }
+        defer { announcing = false }
+        return announcing
+    }
+
+    /// This running app's designated requirement, as text: `cdhash H"..."`
+    /// when signed ad hoc, `identifier "..." and certificate leaf = H"..."`
+    /// or similar with a certificate.
+    static func designatedRequirement() -> String? {
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return nil }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return nil }
+        var requirement: SecRequirement?
+        guard SecCodeCopyDesignatedRequirement(staticCode, [], &requirement) == errSecSuccess,
+              let requirement else { return nil }
+        var text: CFString?
+        guard SecRequirementCopyString(requirement, [], &text) == errSecSuccess, let text else { return nil }
+        return text as String
+    }
+}
+
 /// Posts a notification. UNUserNotificationCenter needs permission and a
 /// properly signed app; `display notification` from osascript needs neither.
+///
+/// The text can hold a host and error messages, so it never goes on
+/// osascript's command line, where `ps` and endpoint-security logs would see
+/// it. The environment is no better (`ps -E` shows it to the same user), so
+/// the whole script goes in on stdin, with the text as escaped AppleScript
+/// string literals. osascript reads its script from stdin when it gets no
+/// arguments.
 func notify(_ message: String, subtitle: String? = nil) {
     var script = "display notification \(Launcher.literal(message)) with title \"Browser Picker\""
     if let subtitle { script += " subtitle \(Launcher.literal(subtitle))" }
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-    p.arguments = ["-e", script]
-    try? p.run()
+    p.arguments = []
+    let input = Pipe()
+    p.standardInput = input
+    p.standardOutput = FileHandle.nullDevice
+    p.standardError = FileHandle.nullDevice
+    do { try p.run() } catch { return }
+    input.fileHandleForWriting.write(Data(script.utf8))
+    try? input.fileHandleForWriting.close()
 }

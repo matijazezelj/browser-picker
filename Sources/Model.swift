@@ -146,4 +146,4 @@ enum Paths {
 //       /// Shows the menu at the cursor; returns nil when cancelled.
 //       static func choose(for url: URL, targets: [Target], preselect: Target?) -> Target?
 //   }
-//   func hostOf(_ url: URL) -> String   // lowercased host, no userinfo/port (main.swift)
+//   func hostOf(_ url: URL) -> String?  // canonical host of an http(s) link, else nil (Host.swift)
