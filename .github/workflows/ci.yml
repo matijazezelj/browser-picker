@@ -6,8 +6,7 @@ name: CI
 
 on:
   push:
-    # linux: the branch the Linux front end is developed on, until it merges.
-    branches: [main, linux]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
