@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Breaking
+
+- A config that uses the new `[[rule]] urls` key cannot be read by 0.3.0 or
+  earlier: they reject `urls` as an unknown key, and while the config has an
+  error every link opens in the `fallback` browser. When one config is shared
+  between machines, upgrade all of them before adding a `urls` rule. Configs
+  without `urls` work unchanged.
+
+### Added
+
+- `[[rule]] urls`: regular expressions (ICU syntax, as `NSRegularExpression`)
+  searched, unanchored and case-sensitive, in the whole link as received. A
+  rule needs `hosts` or `urls` or both, and matches when any host glob or any
+  URL pattern does; first match in file order still wins. An invalid pattern
+  is a config error with a line number. `--list` and `--check` show the
+  patterns after the host globs.
+
 ## [0.3.0] - 2026-11-04
 
 ### Added

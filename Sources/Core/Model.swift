@@ -104,10 +104,22 @@ extension Array where Element == Target {
 /// e.g. "*.slack.com", "*example*") that open in `open`: Target references
 /// as described in `Target.matches(reference:)`, tried in order, the first
 /// that exists on this machine winning. A single string in the file is a
-/// one-element list.
+/// one-element list. `urls` are regular expressions searched for anywhere in
+/// the whole link, as written (case-sensitive); a rule matches when any host
+/// glob or any url regex does.
 struct Rule: Equatable {
     let hosts: [String]
+    let urls: [String]
     let open: [String]
+
+    init(hosts: [String], urls: [String] = [], open: [String]) {
+        self.hosts = hosts; self.urls = urls; self.open = open
+    }
+
+    /// Hosts and url regexes as --list and --check show them.
+    var matchDescription: String {
+        (hosts + urls).joined(separator: " | ")
+    }
 
     /// `open` as the config would write it: "Safari:Work", or
     /// ["Safari:Work", "Google Chrome:Work"].
@@ -117,7 +129,7 @@ struct Rule: Equatable {
 }
 
 struct Config: Equatable {
-    /// Rules in file order; the first whose hosts match wins.
+    /// Rules in file order; the first whose hosts or urls match wins.
     var rules: [Rule] = []
     /// Browser names or bundle IDs to show, in this order. Empty = every
     /// browser found, Safari first.
@@ -184,6 +196,7 @@ enum Paths {
 //       static func load(from url: URL = Paths.config) throws -> Config
 //       static func parse(_ text: String) throws -> Config
 //       func rule(forHost host: String) -> Rule?      // first match, globs via fnmatch
+//       func rule(forURL url: String) -> Rule?        // host globs or url regexes
 //   }
 //   enum Discovery {                       // per front end
 //       static func browsers() -> [(name: String, bundleID: String, appURL: URL)]

@@ -35,8 +35,8 @@ enum Route: Equatable {
 }
 
 /// A link with no host (not http/https, or malformed) matches no rule.
-func route(host: String?, config: Config, targets: [Target]) -> Route {
-    guard let host, let rule = config.rule(forHost: host) else { return .picker }
+func route(url: URL, config: Config, targets: [Target]) -> Route {
+    guard let rule = config.rule(forURL: url.absoluteString) else { return .picker }
     if let target = targets.first(matchingAny: rule.open) { return .rule(rule, target) }
     return .missing(rule)
 }
@@ -158,7 +158,7 @@ struct Router {
         }
 
         let chosen: Target
-        if !forcePicker, case .rule(_, let target) = route(host: hostOf(url), config: config, targets: targets) {
+        if !forcePicker, case .rule(_, let target) = route(url: url, config: config, targets: targets) {
             chosen = target
         } else if targets.count == 1 {
             // Nothing to choose between.

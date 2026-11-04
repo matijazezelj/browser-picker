@@ -139,6 +139,15 @@ enum CoreTests {
             check(f.shown.isEmpty, "no picker when one of the list exists")
         }
         do {
+            // A url regex sees the whole link, path included.
+            let f = F()
+            f.targets = [chromeWork, firefox]
+            f.config = RouterTests.config("[[rule]]\nurls = ['https://.*example-org']\nopen = \"Firefox\"\n")
+            check(f.open("https://github.com/example-org/infra/pull/1/changes") == .opened(firefox),
+                  "a url rule routes by path")
+            check(f.shown.isEmpty, "no picker for a url rule")
+        }
+        do {
             // None exists: the picker, as for a single missing target.
             let f = F()
             f.targets = [chromeWork, firefox]
@@ -147,7 +156,7 @@ enum CoreTests {
             check(f.open() == .opened(firefox), "no reference exists -> picker")
             check(f.shown.count == 1, "picker shown")
             let c = try! Config.parse("[[rule]]\nhosts = [\"*\"]\nopen = [\"Safari:Work\", \"Opera\"]\n")
-            check(route(host: "example.com", config: c, targets: [chromeWork, firefox]) == .missing(c.rules[0]),
+            check(route(url: URL(string: "https://example.com/")!, config: c, targets: [chromeWork, firefox]) == .missing(c.rules[0]),
                   "route reports the rule as missing")
         }
         do {
@@ -293,6 +302,11 @@ enum CoreTests {
         [[rule]]
         hosts = ["*example.net"]
         open = "Firefox"
+
+        [[rule]]
+        hosts = ["gitlab.com"]
+        urls = ['https://.*example-org', '/acme/']
+        open = "Firefox"
         """)
         let targets = [chromeWork, firefox]
 
@@ -304,6 +318,7 @@ enum CoreTests {
         check(list.contains("example.org  ->  Opera   (no such target: picker)"), "missing target")
         check(list.contains("*example.net  ->  Firefox\n"), "a single existing target needs no note")
         check(list.contains("warning: \"*example.net\" also matches"), "pattern warning")
+        check(list.contains("gitlab.com | https://.*example-org | /acme/  ->  Firefox"), "hosts and urls listed:\n\(list)")
 
         var r = Report.check("https://a.example.com/path?token=x", config: c, targets: targets)
         check(r.status == 0 && r.output.contains("host:   a.example.com")
@@ -312,6 +327,9 @@ enum CoreTests {
         check(r.output.contains("-> Opera (no such target)") && r.output.contains("opens:  picker"), "check missing")
         r = Report.check("https://github.com/", config: c, targets: targets)
         check(r.output.contains("rule:   none") && r.output.contains("opens:  picker"), "check no rule")
+        r = Report.check("https://github.com/example-org/infra/pull/1/changes", config: c, targets: targets)
+        check(r.output.contains("rule:   gitlab.com | https://.*example-org | /acme/ -> Firefox")
+              && r.output.contains("opens:  Firefox"), "check a url rule:\n\(r.output)")
         for bad in ["--switch", "-https://example.com", "javascript:alert(1)", "file:///etc/passwd", ""] {
             r = Report.check(bad, config: c, targets: targets)
             check(r.status == 3 && r.output.contains("rejected") && !r.output.contains(bad.isEmpty ? "\u{0}" : bad),

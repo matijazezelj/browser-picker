@@ -22,7 +22,7 @@ enum Report {
         for r in config.rules {
             let found = targets.first(matchingAny: r.open)
             let note = found.map { r.open.count > 1 ? "   (\($0.title))" : "" } ?? "   (no such target: picker)"
-            out.append("  \(r.hosts.joined(separator: " | "))  ->  \(r.openDescription)\(note)")
+            out.append("  \(r.matchDescription)  ->  \(r.openDescription)\(note)")
         }
         for w in config.patternWarnings { out.append("warning: \(w)") }
         return out.joined(separator: "\n")
@@ -38,12 +38,12 @@ enum Report {
         var out: [String] = []
         let host = hostOf(url)
         out.append("host:   \(host ?? "(none)")")
-        switch route(host: host, config: config, targets: targets) {
+        switch route(url: url, config: config, targets: targets) {
         case .rule(let r, let t):
-            out.append("rule:   \(r.hosts.joined(separator: " | ")) -> \(r.openDescription)")
+            out.append("rule:   \(r.matchDescription) -> \(r.openDescription)")
             out.append("opens:  \(t.title)")
         case .missing(let r):
-            out.append("rule:   \(r.hosts.joined(separator: " | ")) -> \(r.openDescription) (no such target)")
+            out.append("rule:   \(r.matchDescription) -> \(r.openDescription) (no such target)")
             out.append("opens:  picker")
         case .picker:
             out.append("rule:   none")

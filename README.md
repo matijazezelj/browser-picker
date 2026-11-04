@@ -43,8 +43,8 @@ macOS-only parts are marked as such below.
 
 ## Features
 
-- **Rules**: host globs such as `*.example.com` map to a target such as
-  `Safari:Work`. First match wins. The config is re-read on every link, so an
+- **Rules**: host globs such as `*.example.com`, or regular expressions on
+  the whole link, map to a target such as `Safari:Work`. First match wins. The config is re-read on every link, so an
   edit applies to the next click.
 - **The cursor menu**: a native-looking menu that opens where the mouse is,
   with the highlighted row right under the pointer, so `Return` or a click
@@ -484,7 +484,8 @@ open = ["Safari:Work", "Google Chrome:Work"]
 | `[picker]` | `command` | array of strings | unset | Linux: the menu program and its arguments, run directly, never through a shell. It must speak the dmenu protocol: entries on stdin, one per line; the chosen line on stdout; empty output or a non-zero exit cancels, except exit status **127**, which means "this menu is unavailable": the auto-detected menus are tried next, then the `fallback`. (127 is also what a shell reports for a command not found, so a wrapper script can pass that through.) The menu gets the link's host and the preselected entry in the environment, never in its arguments; see [The Linux menu](#the-linux-menu). Unset: the first installed menu program, in the order given in [The Linux menu](#the-linux-menu) (Wayland and X11 differ). Ignored on macOS. |
 | `[browsers]` | `include` | array of strings | `[]` | Browsers to show, in this order, by name or bundle ID. Browsers not listed are hidden. Names that match nothing installed are skipped. Empty means every browser: Safari first, then the rest alphabetically. |
 | `[browsers]` | `exclude` | array of strings | `[]` | Browsers never to show, by name or bundle ID. |
-| `[[rule]]` | `hosts` | array of strings | (required) | Host globs; see below. |
+| `[[rule]]` | `hosts` | array of strings | (required unless `urls` is given) | Host globs; see below. |
+| `[[rule]]` | `urls` | array of strings | `[]` | Regular expressions searched in the whole link; see [URL patterns](#url-patterns). A rule matches when any host glob or any URL pattern does. |
 | `[[rule]]` | `open` | reference or list | (required) | The target matching links open in. With a list, the first reference that exists on this machine. |
 
 Unknown tables and keys, duplicate keys and values of the wrong type are
@@ -562,6 +563,44 @@ also matches `badexample.com`, so `--list` and `--check` print a warning for
 it.
 
 [`fnmatch(3)`]: https://man.freebsd.org/cgi/man.cgi?query=fnmatch&sektion=3
+
+### URL patterns
+
+When the host is not enough, `urls` takes regular expressions
+([`NSRegularExpression`], ICU syntax) that are searched in the **whole link
+as received**: scheme, userinfo, host, port, path, query and fragment, with
+none of the canonical forms above applied. A pattern is not anchored, so it
+may match anywhere in the link, and it is case-sensitive as written (`(?i)`
+turns that off). A rule needs `hosts`, `urls` or both, and matches when any
+host glob or any URL pattern does; rules are still tried in file order.
+
+```toml
+[[rule]]
+urls = ['https://.*example-org']   # literal string: no \ escaping needed
+open = "Google Chrome:Work"
+```
+
+That rule matches `https://github.com/example-org/infra/pull/1`.
+Write patterns as `'literal strings'`, in which a backslash is just a
+backslash; in a `"basic string"` every `\` has to be doubled. A pattern that
+is not a valid regular expression is an error with a line number, like any
+other config error. `--list` and `--check` show a rule's URL patterns after
+its host globs, joined with ` | `.
+
+A pattern on the whole link matches words, not owners. `'https://.*example-org'`
+also matches a search for "example-org" (`https://www.google.com/search?q=example-org`),
+`https://evil.example/?example-org` and `https://github.com/example-org@evil.example/`,
+which goes to `evil.example`. Use `hosts` where the host is enough, and anchor
+a pattern when you can: `'^https://github\.com/example-org/'` matches only that
+organisation's pages on GitHub.
+
+**A config that uses `urls` needs Browser Picker 0.4.0 or later.** Earlier
+versions reject `urls` as an unknown key, and while the config has an error
+every link opens in the `fallback` browser, not just the links the rule was
+meant for. When one config is shared between machines, upgrade each of them
+before adding a `urls` rule. Configs without `urls` work unchanged.
+
+[`NSRegularExpression`]: https://developer.apple.com/documentation/foundation/nsregularexpression
 
 ### References: `Browser:Profile`
 

@@ -152,7 +152,7 @@ enum HostTests {
             return
         }
         func rule(_ url: String) -> String? {
-            route(host: URL(string: url).flatMap(hostOf), config: c, targets: []).ruleOpen
+            URL(string: url).map { route(url: $0, config: c, targets: []) }?.ruleOpen
         }
         func expectRule(_ url: String, _ want: String?, line: Int = #line) {
             let got = rule(url)
@@ -201,7 +201,7 @@ enum HostTests {
         // Non-http(s) links never match, not even a catch-all.
         let all = (try? Config.parse("[[rule]]\nhosts = [\"*\"]\nopen = \"All\"\n")) ?? Config()
         for s in ["javascript:alert(1)", "mailto:a@example.com", "file:///tmp/x.html", "https:///"] {
-            check(route(host: URL(string: s).flatMap(hostOf), config: all, targets: []) == .picker,
+            check((URL(string: s).map { route(url: $0, config: all, targets: []) } ?? .picker) == .picker,
                   "\(s) matches no rule")
         }
         check(all.rule(forHost: "") == nil, "empty host matches no rule")

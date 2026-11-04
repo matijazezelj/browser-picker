@@ -32,20 +32,22 @@ extension Config {
         var table = ""             // "" is the root, before any header
         var seenTables: Set<String> = []
         var ruleHosts: [String]?   // the [[rule]] being filled
+        var ruleURLs: [String]?
         var ruleOpen: [String]?
         var ruleLine = 0
         var keys: Set<String> = []   // keys set in the current table
 
         func finishRule() throws {
             guard table == "rule" else { return }
-            guard let hosts = ruleHosts, !hosts.isEmpty else {
-                throw ConfigError.syntax(line: ruleLine, message: "[[rule]] needs hosts = [\"...\"]")
+            let hosts = ruleHosts ?? [], urls = ruleURLs ?? []
+            guard !hosts.isEmpty || !urls.isEmpty else {
+                throw ConfigError.syntax(line: ruleLine, message: "[[rule]] needs hosts = [\"...\"] or urls = [\"...\"]")
             }
             guard let open = ruleOpen else {
                 throw ConfigError.syntax(line: ruleLine, message: "[[rule]] needs open = \"Browser:Profile\"")
             }
-            config.rules.append(Rule(hosts: hosts.map { $0.lowercased() }, open: open))
-            ruleHosts = nil; ruleOpen = nil
+            config.rules.append(Rule(hosts: hosts.map { $0.lowercased() }, urls: urls, open: open))
+            ruleHosts = nil; ruleURLs = nil; ruleOpen = nil
         }
 
         while let item = try parser.next() {
@@ -123,6 +125,14 @@ extension Config {
                 case ("browsers", "include"): config.include = try strings()
                 case ("browsers", "exclude"): config.exclude = try strings()
                 case ("rule", "hosts"): ruleHosts = try strings()
+                case ("rule", "urls"):
+                    let urls = try strings()
+                    for u in urls {
+                        do { _ = try NSRegularExpression(pattern: u) } catch {
+                            throw fail("invalid regex \"\(u)\": \(error.localizedDescription)")
+                        }
+                    }
+                    ruleURLs = urls
                 case ("rule", "open"): ruleOpen = try references()
                 case ("", _):
                     throw fail("key \(key) outside a table; put it under [picker] or [browsers]")
@@ -174,6 +184,20 @@ extension Config {
         guard let bare = HostName.canonical(host) else { return nil }
         return rules.first { rule in
             rule.hosts.contains { fnmatch(HostName.pattern($0), bare, 0) == 0 }
+        }
+    }
+
+    /// First rule whose host globs match the link's host (as rule(forHost:))
+    /// or whose url regexes are found anywhere in the link as given. A link
+    /// with no http(s) host matches nothing, url regexes included.
+    func rule(forURL url: String) -> Rule? {
+        guard let bare = HostName.of(url) else { return nil }
+        let whole = NSRange(url.startIndex..., in: url)
+        return rules.first { rule in
+            rule.hosts.contains { fnmatch(HostName.pattern($0), bare, 0) == 0 }
+                || rule.urls.contains {
+                    (try? NSRegularExpression(pattern: $0))?.firstMatch(in: url, range: whole) != nil
+                }
         }
     }
 

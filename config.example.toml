@@ -98,3 +98,12 @@ open = "Safari:Home"
 # [[rule]]
 # hosts = ["github.com", "*.github.com"]
 # open = "Google Chrome:Home"
+
+# Matching on the whole link instead of the host: `urls` takes regular
+# expressions, searched anywhere in the link as received, case-sensitive.
+# Use 'literal strings' so a backslash needs no escaping, and anchor the
+# pattern: an unanchored one also matches the word in a path or query
+# string, or in https://github.com/example-org@evil.example/.
+# [[rule]]
+# urls = ['^https://github\.com/example-org/']
+# open = "Google Chrome:Work"

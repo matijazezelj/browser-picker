@@ -114,6 +114,9 @@ enum ConfigTests {
         expectError("[picker]\nshow_private = true\nshow_private = false\n", line: 3, "duplicate key")
         expectError("[picker\n", line: 1, "expected ]")
         expectError("\n[[rule]]\nopen = \"Safari\"\n", line: 2, "needs hosts")
+        expectError("[[rule]]\nhosts = []\nurls = []\nopen = \"Safari\"\n", line: 1, "needs hosts = [\"...\"] or urls")
+        expectError("[[rule]]\nopen = \"x\"\nurls = ['a', '(b']\n", line: 3, "invalid regex \"(b\"")
+        expectError("[[rule]]\nurls = \"a\"\nopen = \"x\"\n", line: 2, "urls must be an array of strings")
         expectError("[[rule]]\nhosts = [\"a\"]\nopen = \"x\"\n[[rule]]\nhosts = [\"b\"]\n", line: 4, "needs open")
         expectError("[[rule]]\nhosts = [\"a\"]\nopen = \"x\"\nopen = \"y\"\n", line: 4, "duplicate key")
         expectError("[[rule]]\nhosts = [\"a\"]\nopen = \"x\"\nbrowser = \"y\"\n", line: 4, "unknown key browser in [[rule]]")
@@ -146,6 +149,36 @@ enum ConfigTests {
         check(globs.rule(forHost: "notslack.com")?.openDescription == "Anything", "nor notslack.com")
         check(globs.rule(forHost: "github.com")?.openDescription == "Anything", "first match wins, * last")
         check(Config().rule(forHost: "example.org") == nil, "no rules, no match")
+
+        // MARK: URL regexes
+
+        let regexes = parse("""
+        [[rule]]
+        urls = ['https://.*example-org']
+        open = "Google Chrome:Work"
+
+        [[rule]]
+        hosts = ["github.com"]
+        open = "GitHub"
+
+        [[rule]]
+        hosts = ["*.example.com"]
+        urls = ['/wiki/']
+        open = "Both"
+        """)
+        check(regexes.rules.first == Rule(hosts: [], urls: ["https://.*example-org"], open: ["Google Chrome:Work"]),
+              "a rule with only urls")
+        check(regexes.rule(forURL: "https://github.com/example-org/infra/pull/1/changes")?.openDescription
+              == "Google Chrome:Work", "url regex anywhere in the link, before a later host rule")
+        check(regexes.rule(forURL: "https://github.com/apple/swift")?.openDescription == "GitHub",
+              "no url regex matches: the host rule")
+        check(regexes.rule(forURL: "http://github.com/example-org")?.openDescription == "GitHub", "http does not match https://")
+        check(regexes.rule(forURL: "https://github.com/EXAMPLE-ORG")?.openDescription == "GitHub", "regexes are case-sensitive")
+        check(regexes.rule(forURL: "https://other.test/wiki/x")?.openDescription == "Both", "urls or hosts: the url")
+        check(regexes.rule(forURL: "https://a.example.com/")?.openDescription == "Both", "urls or hosts: the host")
+        check(regexes.rule(forURL: "https://other.test/") == nil, "neither matches")
+        check(regexes.rule(forURL: "mailto:example-org@https://example-org") == nil, "no http(s) host, no match")
+        check(parse("[[rule]]\nhosts = [\"a\"]\nurls = []\nopen = \"x\"\n").rules.first?.urls == [], "empty urls")
 
         // MARK: Target.matches(reference:)
 
