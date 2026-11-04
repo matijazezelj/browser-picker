@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-04
+
 ### Added
 
 - Linux: one project, two front ends. The sources are split into
@@ -34,6 +36,11 @@ All notable changes to this project are documented here. The format follows
   environment, never its argv.
 - Linux: a `[picker] command` that cannot be started counts as exit status
   127 (menu unavailable).
+- Linux: a desktop entry that only hands links on (`xdg-open`, `exo-open`,
+  `gio`, `kde-open`, …) or that runs Browser Picker itself, also through a
+  symlink, is never offered or used as a browser, so a link cannot loop back.
+- Linux: a menu program that exits without reading its input no longer
+  loses the link (a broken pipe is handled, not fatal).
 
 ### Changed
 
