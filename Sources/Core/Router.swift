@@ -73,7 +73,7 @@ struct Router {
         case opened(Target)
         /// The config's `fallback` target.
         case fallback(Target)
-        /// A plain open with the fallback browser, or Safari.
+        /// A plain open with a fallback browser, or the last-resort app.
         case fallbackApp(URL)
         /// The menu was cancelled: dropped on purpose, nothing said.
         case cancelled
@@ -161,9 +161,10 @@ struct Router {
     /// What macOS hands the default browser through application(_:open:):
     /// documents (.html, .webarchive) from the Finder, a file URL. A file has
     /// no host to route by, and a file URL must never reach a browser's
-    /// command line, so it is opened only plainly, through NSWorkspace with
-    /// the file URL: the fallback browser, then Safari. An http(s) URL that
-    /// arrives this way is routed like a link; anything else is rejected.
+    /// command line, so it is opened only plainly (launchPlain) with the
+    /// file URL: the fallback browsers, then the last-resort app. An http(s)
+    /// URL that arrives this way is routed like a link; anything else is
+    /// rejected.
     func openFile(_ url: URL) -> Outcome {
         if url.isFileURL {
             return openFallback(url, config: (try? loadConfig()) ?? Config(), reason: nil, plainOnly: true)
@@ -172,9 +173,9 @@ struct Router {
     }
 
     /// The fallback target from config; then the fallback browser opened
-    /// plainly (without a profile); then Safari; then a notification. Never
-    /// NSWorkspace.open(url) alone: that would hand the link straight back to
-    /// this app, the default browser.
+    /// plainly (without a profile); then the last-resort app (Safari on
+    /// macOS); then a notification. Never "open with the default browser":
+    /// that would hand the link straight back to this app.
     ///
     /// `failed` is the target that already failed. It is not retried, so when
     /// it is the fallback too, the plain open is next. `quiet` says the first
