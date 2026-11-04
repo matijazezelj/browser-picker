@@ -117,8 +117,11 @@ enum Spawn {
         }
         // A writer thread, so a program that answers before reading all its
         // input (or never reads it) cannot deadlock against the reads below.
+        // A program that exits without reading gets EPIPE, not a crash:
+        // SIGPIPE is ignored (main.swift), and write(contentsOf:) throws
+        // where write(_:) would trap.
         let writer = Thread {
-            stdin.fileHandleForWriting.write(Data(input.utf8))
+            try? stdin.fileHandleForWriting.write(contentsOf: Data(input.utf8))
             try? stdin.fileHandleForWriting.close()
         }
         writer.start()

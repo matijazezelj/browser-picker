@@ -135,4 +135,8 @@ func cli(_ args: [String]) -> Int32 {
     }
 }
 
+// A menu program that exits before reading its stdin must not kill us with
+// SIGPIPE (the link would be lost without a word). Programs we start get the
+// default disposition back (Spawn.detached sets it).
+signal(SIGPIPE, SIG_IGN)
 exit(cli(Array(CommandLine.arguments.dropFirst())))
