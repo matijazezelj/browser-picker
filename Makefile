@@ -114,6 +114,11 @@ $(BUILD)/config-tests: Sources/Model.swift Sources/Config.swift Sources/Host.swi
 	mkdir -p $(BUILD)
 	$(SWIFTC) -o $@ $^
 
+# The grants are reset only when the designated requirement changes. codesign
+# prints it on stderr: "designated => ..." for a certificate signature, and
+# "# designated => cdhash ..." for an ad-hoc one, so both streams and both
+# forms are read. Reading stdout and only the "#" form left it empty for a
+# certificate-signed app, so a same-identity upgrade was not recognised.
 install: build
 	@if [ "$$(cat "$(DEST)/Contents/Resources/source.sha256" 2>/dev/null)" = \
 	      "$$(cat "$(APP)/Contents/Resources/source.sha256")" ]; then \
@@ -121,8 +126,8 @@ install: build
 	fi; \
 	set -e; \
 	mkdir -p "$(PREFIX)"; \
-	old_req=$$(codesign -d -r- "$(DEST)" 2>/dev/null | sed -n 's/^# designated => //p'); \
-	new_req=$$(codesign -d -r- "$(APP)" 2>/dev/null | sed -n 's/^# designated => //p'); \
+	old_req=$$(codesign -d -r- "$(DEST)" 2>&1 | sed -n 's/^\(# \)\{0,1\}designated => //p'); \
+	new_req=$$(codesign -d -r- "$(APP)" 2>&1 | sed -n 's/^\(# \)\{0,1\}designated => //p'); \
 	rm -rf "$(DEST).tmp"; \
 	ditto "$(APP)" "$(DEST).tmp"; \
 	pkill -f "$(DEST)/Contents/MacOS/$(EXECUTABLE)" 2>/dev/null || true; \

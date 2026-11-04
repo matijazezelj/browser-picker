@@ -12,6 +12,15 @@ All notable changes to this project are documented here. The format follows
   release workflow refuses a tag that has none
   (`scripts/changelog-section.sh`).
 
+### Fixed
+
+- `make install` did not recognise an upgrade signed with the same
+  certificate: it read the designated requirement only from stdout and only
+  in its ad-hoc form, so for a certificate-signed app it was empty. It
+  printed "allow Browser Picker again" instead of "the existing grants still
+  apply", and switching between two certificates would not have reset the
+  old grants.
+
 ## [0.2.1] - 2026-11-04
 
 ### Fixed
