@@ -251,6 +251,11 @@ jobs:
           nm -D --undefined-only "$BIN" | awk '{print $NF}' \
             | grep -E '^(socket|connect|bind|listen|accept|send|recv|getaddrinfo|gethostby|getnameinfo|res_)' \
             | sed 's/^/  /' || echo "  (none)"
+          # Makefile.linux's own check: our code's imports (before
+          # Foundation is linked in) and the helper programs it names.
+          if grep -q '^check-no-network:' Makefile.linux; then
+            make check-no-network || fail=1
+          fi
           [ "$fail" = 0 ] && echo "no network code found"
           exit "$fail"
 

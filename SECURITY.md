@@ -161,6 +161,18 @@ check of the binary itself proves less than on macOS: the statically linked
 Foundation carries its own resolver calls (its `Host` type), so those
 symbols are listed in the log for a reader rather than failing the run.
 
+The Linux front end also runs `make check-no-network`: it compiles
+`Sources/Core` and `Sources/Linux` into one object before Foundation is
+linked in, fails on socket, DNS, `dlopen` or `URLSession` references from
+our own code, and holds the helper programs it starts to an allowlist.
+
+On Linux, two things Browser Picker shows reach another process's command
+line, where any local user can read them (`/proc/<pid>/cmdline`, `ps`): the
+menu program's prompt, which names the link's **host**, and the
+`notify-send` message, which is the same host-only text as the macOS
+notifications. Neither carries the path, query or fragment. The full link
+is passed only to the browser that opens it, as one argument.
+
 What it cannot prove:
 
 - **System frameworks.** AppKit and Foundation load CFNetwork and can make

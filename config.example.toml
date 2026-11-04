@@ -51,7 +51,8 @@ fallback = "Safari"
 # Linux only: the menu program, as a list of arguments, run directly (never
 # through a shell). It gets one entry per line on stdin and prints the chosen
 # line; a non-zero exit or no output cancels (the dmenu protocol). Unset, the
-# first of fuzzel, wofi, rofi, bemenu and tofi that is installed is used.
+# first installed menu program is used (fuzzel, wofi, rofi, bemenu, tofi on
+# Wayland; rofi, bemenu, dmenu on X11; see "The Linux menu" in the README).
 # command = ["fuzzel", "--dmenu", "--prompt", "Open in: "]
 
 [browsers]
