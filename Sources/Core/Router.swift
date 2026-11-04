@@ -49,7 +49,9 @@ struct Router {
     static let rejectedMessage = "Ignored a link that is not an http or https address."
 
     var loadConfig: () throws -> Config
-    var targets: (Config) -> [Target]
+    /// The targets, and discovery's warnings (profiles that could not be
+    /// read), which are reported on every link.
+    var targets: (Config) -> (targets: [Target], warnings: [String])
     var browsers: () -> [Browser]
     /// The browser to open plainly when everything else failed: Safari on
     /// macOS. nil when there is none (Linux has no browser it can count on).
@@ -142,7 +144,9 @@ struct Router {
         } catch {
             return openFallback(url, config: Config(), reason: "\(error)")
         }
-        let targets = self.targets(config).filter { !isOwn($0.bundleID) }
+        let discovered = self.targets(config)
+        if !discovered.warnings.isEmpty { notify(discovered.warnings.joined(separator: "\n"), nil) }
+        let targets = discovered.targets.filter { !isOwn($0.bundleID) }
         if targets.isEmpty {
             return openFallback(url, config: config, targets: targets, reason: "No browsers found to choose from.")
         }
@@ -225,7 +229,16 @@ struct Router {
         }
 
         if !plainOnly {
-            let targets = (known ?? self.targets(config)).filter { !isOwn($0.bundleID) && !tried.contains($0) }
+            let all: [Target]
+            if let known {
+                all = known
+            } else {
+                let discovered = self.targets(config)
+                all = discovered.targets
+                errors += discovered.warnings
+                if !discovered.warnings.isEmpty { loud = true }
+            }
+            let targets = all.filter { !isOwn($0.bundleID) && !tried.contains($0) }
             if let t = targets.first(matchingAny: config.fallback) {
                 do {
                     try launch(url, t)

@@ -234,17 +234,17 @@ enum CoreTests {
           }
         }}
         """.utf8)
-        let p = Profiles.chromium(localState: localState)
+        let p = Profiles.chromium(localState: localState) ?? []
         check(p.map(\.directory) == ["Default", "Profile 2", "Profile 3", "Profile 10"],
               "Default first, then numeric order: \(p.map(\.directory))")
         check(p.map(\.name) == ["Home", "Two", "Profile 3", "Ten"], "names, the directory when empty")
 
         let ordered = Data(#"{"profile": {"info_cache": {"Default": {"name": "A"}, "Profile 1": {"name": "B"}}, "profiles_order": ["Profile 1", "Gone", "Default"]}}"#.utf8)
-        check(Profiles.chromium(localState: ordered).map(\.name) == ["B", "A"], "profiles_order wins, unknown entries skipped")
-        check(Profiles.chromium(localState: Data("not json".utf8)).isEmpty, "bad JSON: no profiles")
-        check(Profiles.chromium(localState: Data("[]".utf8)).isEmpty, "wrong shape: no profiles")
-        check(Profiles.chromium(userDataDir: URL(fileURLWithPath: "/nonexistent-\(UUID().uuidString)")).isEmpty,
-              "missing dir: no profiles")
+        check(Profiles.chromium(localState: ordered)?.map(\.name) == ["B", "A"], "profiles_order wins, unknown entries skipped")
+        check(Profiles.chromium(localState: Data("not json".utf8)) == nil, "bad JSON: not understood")
+        check(Profiles.chromium(localState: Data("[]".utf8)) == nil, "wrong shape: not understood")
+        let missing = Profiles.chromium(userDataDir: URL(fileURLWithPath: "/nonexistent-\(UUID().uuidString)"))
+        check(missing.profiles.isEmpty && missing.warning == nil, "missing dir: no profiles, no warning")
 
         let ini = """
         [General]
@@ -279,8 +279,36 @@ enum CoreTests {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             try ini.write(to: dir.appendingPathComponent("profiles.ini"), atomically: true, encoding: .utf8)
             try localState.write(to: dir.appendingPathComponent("Local State"))
-            check(Profiles.firefox(root: dir) == ["default-release", "work"], "profiles.ini from disk")
-            check(Profiles.chromium(userDataDir: dir).count == 4, "Local State from disk")
+            let ff = Profiles.firefox(root: dir), chromium = Profiles.chromium(userDataDir: dir)
+            check(ff.profiles == ["default-release", "work"] && ff.warning == nil, "profiles.ini from disk")
+            check(chromium.profiles.count == 4 && chromium.warning == nil, "Local State from disk")
+
+            // A directory where the file should be cannot be read, whoever
+            // runs the tests (chmod 000 would not stop root).
+            let unreadable = dir.appendingPathComponent("unreadable")
+            try FileManager.default.createDirectory(at: unreadable.appendingPathComponent("Local State"),
+                                                    withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: unreadable.appendingPathComponent("profiles.ini"),
+                                                    withIntermediateDirectories: true)
+            let c1 = Profiles.chromium(userDataDir: unreadable), f1 = Profiles.firefox(root: unreadable)
+            check(c1.profiles.isEmpty && c1.warning?.contains(unreadable.path + "/Local State") == true,
+                  "unreadable Local State warns with its path: \(c1.warning ?? "nil")")
+            check(f1.profiles.isEmpty && f1.warning?.contains(unreadable.path + "/profiles.ini") == true,
+                  "unreadable profiles.ini warns with its path: \(f1.warning ?? "nil")")
+            #if os(macOS)
+            check(c1.warning?.contains("Full Disk Access") == true, "macOS suggests Full Disk Access")
+            #endif
+
+            let malformed = dir.appendingPathComponent("malformed")
+            try FileManager.default.createDirectory(at: malformed, withIntermediateDirectories: true)
+            try Data("[]".utf8).write(to: malformed.appendingPathComponent("Local State"))
+            try Data([0xFF, 0xFE, 0x00]).write(to: malformed.appendingPathComponent("profiles.ini"))
+            let c2 = Profiles.chromium(userDataDir: malformed), f2 = Profiles.firefox(root: malformed)
+            check(c2.profiles.isEmpty && c2.warning?.contains("info_cache") == true
+                  && c2.warning?.contains("Full Disk Access") == false,
+                  "malformed Local State warns, without the Full Disk Access hint: \(c2.warning ?? "nil")")
+            check(f2.profiles.isEmpty && f2.warning?.contains("UTF-8") == true,
+                  "malformed profiles.ini warns: \(f2.warning ?? "nil")")
         } catch {
             check(false, "temporary files: \(error)")
         }
@@ -319,6 +347,11 @@ enum CoreTests {
         check(list.contains("*example.net  ->  Firefox\n"), "a single existing target needs no note")
         check(list.contains("warning: \"*example.net\" also matches"), "pattern warning")
         check(list.contains("gitlab.com | https://.*example-org | /acme/  ->  Firefox"), "hosts and urls listed:\n\(list)")
+        let profileWarning = "Google Chrome is shown without its profiles: /x/Local State: Operation not permitted"
+        check(Report.list(config: c, targets: targets, configPath: "/cfg/config.toml", warnings: [profileWarning])
+                .contains("\nwarning: \(profileWarning)"), "list prints a discovery warning")
+        check(Report.check("https://a.example.com/", config: c, targets: targets, warnings: [profileWarning])
+                .output.contains("\nwarning: \(profileWarning)"), "check prints a discovery warning")
 
         var r = Report.check("https://a.example.com/path?token=x", config: c, targets: targets)
         check(r.status == 0 && r.output.contains("host:   a.example.com")

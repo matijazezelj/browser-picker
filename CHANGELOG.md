@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-04
+
 ### Breaking
 
 - A config that uses the new `[[rule]] urls` key cannot be read by 0.3.0 or
@@ -22,6 +24,15 @@ All notable changes to this project are documented here. The format follows
   URL pattern does; first match in file order still wins. An invalid pattern
   is a config error with a line number. `--list` and `--check` show the
   patterns after the host globs.
+
+### Fixed
+
+- A Chromium `Local State` or Firefox `profiles.ini` that is there but cannot
+  be read or understood (on macOS, usually for want of Full Disk Access) no
+  longer quietly shows the browser without profiles: a notification on each
+  link and a `warning:` line in `--list` and `--check` name the browser, the
+  file and the reason. A file that is missing (a browser never run) still
+  means no profiles, silently.
 
 ## [0.3.0] - 2026-11-04
 

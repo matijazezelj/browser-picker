@@ -354,8 +354,10 @@ enum Discovery {
 
     /// Every browser expanded into its profiles (and a private window), in
     /// the order the menu shows them: alphabetical by name, or the
-    /// [browsers] include order; exclude applied.
-    static func targets(config: Config, browsers found: [LinuxBrowser], env: LinuxEnvironment = .current) -> [Target] {
+    /// [browsers] include order; exclude applied. With a warning for each
+    /// browser whose profiles could not be read.
+    static func targets(config: Config, browsers found: [LinuxBrowser],
+                        env: LinuxEnvironment = .current) -> (targets: [Target], warnings: [String]) {
         var list = found
         let key = { (s: String) in s.trimmingCharacters(in: .whitespaces).lowercased() }
         func named(_ ref: String, _ b: LinuxBrowser) -> Bool {
@@ -375,7 +377,11 @@ enum Discovery {
         }
         list.removeAll { b in config.exclude.contains { named($0, b) } }
 
-        return list.flatMap { b -> [Target] in
+        var warnings: [String] = []
+        func warn(_ browser: String, _ warning: String?) {
+            if let warning { warnings.append("\(browser) is shown without its profiles: \(warning)") }
+        }
+        let targets = list.flatMap { b -> [Target] in
             func target(_ kind: TargetKind) -> Target {
                 Target(browserName: b.name, bundleID: b.id, appURL: b.appURL, kind: kind)
             }
@@ -384,12 +390,16 @@ enum Discovery {
             switch family(of: b, env: env) {
             case .chromium(let dirs, _):
                 let dir = dirs.first { FileManager.default.fileExists(atPath: $0 + "/Local State") }
-                let profiles = dir.map { Profiles.chromium(userDataDir: URL(fileURLWithPath: $0)) } ?? []
+                let read = dir.map { Profiles.chromium(userDataDir: URL(fileURLWithPath: $0)) }
+                warn(b.name, read?.warning)
+                let profiles = read?.profiles ?? []
                 kinds = profiles.isEmpty ? [.plain] : profiles.map { .chromiumProfile(directory: $0.directory, name: $0.name) }
                 hasPrivate = true
             case .firefox(let roots):
                 let root = roots.first { FileManager.default.fileExists(atPath: $0 + "/profiles.ini") }
-                let names = root.map { Profiles.firefox(root: URL(fileURLWithPath: $0)) } ?? []
+                let read = root.map { Profiles.firefox(root: URL(fileURLWithPath: $0)) }
+                warn(b.name, read?.warning)
+                let names = read?.profiles ?? []
                 kinds = names.isEmpty ? [.plain] : names.map { .firefoxProfile(name: $0) }
                 hasPrivate = true
             case .plain:
@@ -398,5 +408,6 @@ enum Discovery {
             if config.showPrivate && hasPrivate { kinds.append(.privateWindow) }
             return kinds.map(target)
         }
+        return (targets, warnings)
     }
 }

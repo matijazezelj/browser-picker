@@ -5,8 +5,9 @@ import Foundation
 
 enum Report {
     /// --list: every target with the reference a rule would use for it, then
-    /// the rules, then warnings about patterns that match more than they say.
-    static func list(config: Config, targets: [Target], configPath: String) -> String {
+    /// the rules, then warnings about patterns that match more than they say
+    /// and about profiles that could not be read.
+    static func list(config: Config, targets: [Target], configPath: String, warnings: [String] = []) -> String {
         var out: [String] = []
         let w = max(targets.map { $0.title.count }.max() ?? 0, 5)
         let rw = max(targets.map { reference(of: $0).count }.max() ?? 0, 9)
@@ -24,13 +25,14 @@ enum Report {
             let note = found.map { r.open.count > 1 ? "   (\($0.title))" : "" } ?? "   (no such target: picker)"
             out.append("  \(r.matchDescription)  ->  \(r.openDescription)\(note)")
         }
-        for w in config.patternWarnings { out.append("warning: \(w)") }
+        for w in config.patternWarnings + warnings { out.append("warning: \(w)") }
         return out.joined(separator: "\n")
     }
 
     /// --check URL: which rule and target a link would get. Status 3 when the
     /// text is rejected (not an http(s) link with a valid host), else 0.
-    static func check(_ text: String, config: Config, targets: [Target]) -> (output: String, status: Int32) {
+    static func check(_ text: String, config: Config, targets: [Target],
+                      warnings: [String] = []) -> (output: String, status: Int32) {
         // The same check the app makes on every link, before any rule.
         guard let url = webURL(text) else {
             return ("host:   (none)\nopens:  nothing: rejected, not an http(s) link with a valid host", 3)
@@ -49,7 +51,7 @@ enum Report {
             out.append("rule:   none")
             out.append("opens:  picker")
         }
-        for w in config.patternWarnings { out.append("warning: \(w)") }
+        for w in config.patternWarnings + warnings { out.append("warning: \(w)") }
         return (out.joined(separator: "\n"), 0)
     }
 }

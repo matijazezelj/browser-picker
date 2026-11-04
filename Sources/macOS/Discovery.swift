@@ -52,8 +52,9 @@ enum Discovery {
     // MARK: Targets
 
     /// Every browser expanded into its profiles (and a private window), in
-    /// the order the picker shows them.
-    static func targets(config: Config) -> [Target] {
+    /// the order the picker shows them, and a warning for each browser whose
+    /// profiles could not be read.
+    static func targets(config: Config) -> (targets: [Target], warnings: [String]) {
         var list = browsers()
         let key = { (s: String) in s.trimmingCharacters(in: .whitespaces).lowercased() }
         func named(_ ref: String, _ b: (name: String, bundleID: String, appURL: URL)) -> Bool {
@@ -82,7 +83,11 @@ enum Discovery {
         }
         list.removeAll { b in config.exclude.contains { named($0, b) } }
 
-        return list.flatMap { b -> [Target] in
+        var warnings: [String] = []
+        func warn(_ browser: String, _ warning: String?) {
+            if let warning { warnings.append("\(browser) is shown without its profiles: \(warning)") }
+        }
+        let targets = list.flatMap { b -> [Target] in
             let family = family(of: b.bundleID, appURL: b.appURL)
             func target(_ kind: TargetKind) -> Target {
                 Target(browserName: b.name, bundleID: b.bundleID, appURL: b.appURL, kind: kind)
@@ -93,11 +98,13 @@ enum Discovery {
                 let names = safariProfiles()
                 kinds = names.isEmpty ? [.safariDefault] : names.map { .safariProfile(name: $0) }
             case .chromium(let dir, _):
-                let profiles = chromiumProfiles(userDataDir: dir)
+                let (profiles, warning) = chromiumProfiles(userDataDir: dir)
+                warn(b.name, warning)
                 kinds = profiles.isEmpty ? [.plain]
                     : profiles.map { .chromiumProfile(directory: $0.directory, name: $0.name) }
             case .firefox(let dir):
-                let names = firefoxProfiles(root: dir)
+                let (names, warning) = firefoxProfiles(root: dir)
+                warn(b.name, warning)
                 kinds = names.isEmpty ? [.plain] : names.map { .firefoxProfile(name: $0) }
             case .plain(let hasPrivate):
                 kinds = [.plain]
@@ -107,6 +114,7 @@ enum Discovery {
             if config.showPrivate && family.hasPrivateWindow { kinds.append(.privateWindow) }
             return kinds.map(target)
         }
+        return (targets, warnings)
     }
 
     // MARK: Browser families
@@ -216,11 +224,11 @@ enum Discovery {
     //
     // The readers themselves are platform-neutral, in Core/Profiles.swift.
 
-    static func chromiumProfiles(userDataDir: URL) -> [(directory: String, name: String)] {
+    static func chromiumProfiles(userDataDir: URL) -> (profiles: [(directory: String, name: String)], warning: String?) {
         Profiles.chromium(userDataDir: userDataDir)
     }
 
-    static func firefoxProfiles(root: URL) -> [String] { Profiles.firefox(root: root) }
+    static func firefoxProfiles(root: URL) -> (profiles: [String], warning: String?) { Profiles.firefox(root: root) }
 
     // MARK: Safari profiles
 

@@ -298,19 +298,19 @@ enum LinuxTests {
               "[Profile0]\nName=default\nPath=a.default\n[Profile1]\nName=-evil\nPath=b\n[Profile2]\nName=Work\nPath=c\nDefault=1\n")
 
         let found = Discovery.browsers(env: env, which: always)
-        let titles = Discovery.targets(config: Config(), browsers: found, env: env).map(\.title)
+        let titles = Discovery.targets(config: Config(), browsers: found, env: env).targets.map(\.title)
         check(titles == ["Brave: Work", "Brave: Home", "Brave: Private", "Firefox: Work", "Firefox: default", "Firefox: -evil",
                          "Firefox: Private", "Plain"], "targets: \(titles)")
         var c = Config()
         c.include = ["firefox", "plain.desktop"]
         c.showPrivate = false
-        check(Discovery.targets(config: c, browsers: found, env: env).map(\.title) == ["Firefox: Work", "Firefox: default", "Firefox: -evil", "Plain"],
+        check(Discovery.targets(config: c, browsers: found, env: env).targets.map(\.title) == ["Firefox: Work", "Firefox: default", "Firefox: -evil", "Plain"],
               "include order, by name or desktop ID; no private")
         c = Config()
         c.exclude = ["brave-browser.desktop"]
-        check(!Discovery.targets(config: c, browsers: found, env: env).contains { $0.browserName == "Brave" }, "exclude by desktop ID")
+        check(!Discovery.targets(config: c, browsers: found, env: env).targets.contains { $0.browserName == "Brave" }, "exclude by desktop ID")
 
-        let targets = Discovery.targets(config: Config(), browsers: found, env: env)
+        let targets = Discovery.targets(config: Config(), browsers: found, env: env).targets
         check(targets.first { $0.matches(reference: "brave-browser.desktop:Work") } != nil, "desktop ID as a reference")
         let url = URL(string: "https://example.com/x?y=1")!
         func argv(_ title: String) -> [String]? {

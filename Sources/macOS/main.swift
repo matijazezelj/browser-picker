@@ -113,8 +113,9 @@ func cli(_ args: [String]) -> Int32 {
 
     case "--list":
         guard let config = loadConfig() else { return 1 }
-        print(Report.list(config: config, targets: Discovery.targets(config: config),
-                          configPath: Paths.config.path))
+        let found = Discovery.targets(config: config)
+        print(Report.list(config: config, targets: found.targets, configPath: Paths.config.path,
+                          warnings: found.warnings))
         return 0
 
     case "--check":
@@ -123,7 +124,9 @@ func cli(_ args: [String]) -> Int32 {
             return 2
         }
         guard let config = loadConfig() else { return 1 }
-        let (output, status) = Report.check(args[1], config: config, targets: Discovery.targets(config: config))
+        let found = Discovery.targets(config: config)
+        let (output, status) = Report.check(args[1], config: config, targets: found.targets,
+                                            warnings: found.warnings)
         print(output)
         return status
 

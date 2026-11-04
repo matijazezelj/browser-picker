@@ -20,7 +20,7 @@ func fail(_ message: String) {
 
 func loadBrowsers() -> [LinuxBrowser] { Discovery.browsers() }
 
-func linuxTargets(_ config: Config) -> [Target] {
+func linuxTargets(_ config: Config) -> (targets: [Target], warnings: [String]) {
     Discovery.targets(config: config, browsers: loadBrowsers())
 }
 
@@ -30,7 +30,7 @@ let router = Router(
     browsers: { loadBrowsers().map { (name: $0.name, bundleID: $0.id, appURL: $0.appURL) } },
     // Nothing like Safari is always there; the first browser found is the
     // last resort, so a link still opens somewhere when the fallback cannot.
-    lastResortApp: { linuxTargets(Config()).first?.appURL },
+    lastResortApp: { linuxTargets(Config()).targets.first?.appURL },
     ownBundleID: DesktopFile.id,
     lastPick: { State.lastPick() },
     rememberPick: { State.remember($0) },
@@ -110,7 +110,8 @@ func cli(_ args: [String]) -> Int32 {
 
     case "--list":
         guard let c = config() else { return 1 }
-        print(Report.list(config: c, targets: linuxTargets(c), configPath: Paths.config.path))
+        let found = linuxTargets(c)
+        print(Report.list(config: c, targets: found.targets, configPath: Paths.config.path, warnings: found.warnings))
         return 0
 
     case "--check":
@@ -119,7 +120,8 @@ func cli(_ args: [String]) -> Int32 {
             return 2
         }
         guard let c = config() else { return 1 }
-        let r = Report.check(args[1], config: c, targets: linuxTargets(c))
+        let found = linuxTargets(c)
+        let r = Report.check(args[1], config: c, targets: found.targets, warnings: found.warnings)
         print(r.output)
         return r.status
 

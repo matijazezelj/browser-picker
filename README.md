@@ -896,6 +896,12 @@ or its host is invalid, so the app would ignore it (see
 **Safari profiles are missing from the menu.** Open Safari once with
 Accessibility granted, so the profile list can be read and cached.
 
+**Chrome, Brave or Firefox profiles are missing from the menu.** A notification
+on each link, and a `warning:` line in `"$bp" --list`, names the file that
+could not be read (`Local State`, `profiles.ini`). When macOS keeps Browser
+Picker out of it, grant Full Disk Access (System Settings › Privacy &
+Security › Full Disk Access).
+
 **"No Accessibility access" or "Not allowed to control Safari".** Grant
 the permission named in the notification (see [Permissions](#permissions)).
 If Browser Picker is already switched on but it still fails after an

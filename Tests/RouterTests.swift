@@ -28,6 +28,7 @@ enum RouterTests {
     final class Fake {
         var config: () throws -> Config = { Config() }
         var targets: [Target] = [safariWork, chromeWork, firefox]
+        var warnings: [String] = []
         var browsers: [Router.Browser] = [
             ("Safari", "com.apple.Safari", safariApp),
             ("Google Chrome", "com.google.Chrome", chromeApp),
@@ -51,7 +52,7 @@ enum RouterTests {
         var router: Router {
             Router(
                 loadConfig: { try self.config() },
-                targets: { _ in self.targets },
+                targets: { _ in (self.targets, self.warnings) },
                 browsers: { self.browsers },
                 lastResortApp: { self.safari },
                 ownBundleID: Paths.bundleID,
@@ -205,6 +206,26 @@ enum RouterTests {
             let f = Fake(); f.targets = []; f.browsers = []; f.safari = nil
             check(f.open() == .failed, "nothing to open with")
             check(f.notes.last?.subtitle?.contains("No browsers") == true, "and says why: \(f.notes)")
+        }
+        do {
+            // Profiles that could not be read: the link still follows its
+            // rule, and the warning is shown on every link.
+            let warning = "Google Chrome is shown without its profiles: /x/Local State: Operation not permitted"
+            let f = Fake(); f.config = config(rules); f.warnings = [warning]
+            let outcome = f.router.openLink("https://wiki.example.com/x?token=s3cret", forcePicker: false)
+            check(outcome == .opened(chromeWork), "a discovery warning does not change the route")
+            check(f.notes.count == 1 && f.notes[0].message == warning, "the discovery warning is shown: \(f.notes)")
+            check(!f.notes.contains { "\($0.message) \($0.subtitle ?? "")".contains("s3cret") }, "without the URL")
+            _ = f.router.openLink("https://wiki.example.com/", forcePicker: false)
+            check(f.notes.count == 2, "and again on the next link: \(f.notes)")
+        }
+        do {
+            // With a broken config the warning joins the fallback's notification.
+            let f = Fake(); f.config = { throw ConfigError.syntax(line: 3, message: "unknown key x") }
+            f.targets = [safari, chromeWork]; f.warnings = ["Firefox is shown without its profiles: /x/profiles.ini: Is a directory"]
+            check(f.open() == .fallback(safari), "broken config with a discovery warning -> fallback")
+            check(f.notes.count == 1 && f.notes[0].message.contains("line 3") && f.notes[0].message.contains("profiles.ini"),
+                  "both are reported: \(f.notes)")
         }
 
         // MARK: the launcher fails after the URL was accepted
