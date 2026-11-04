@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `make install` kept an existing build after a signing identity was created
+  (or `SIGN_IDENTITY`/`CODESIGN_FLAGS` changed): the checksum covered the
+  signing settings, but nothing told make to rebuild. They are now compared
+  when the Makefile is read and a change forces a rebuild.
+
 ## [0.2.0] - 2026-11-04
 
 ### Security

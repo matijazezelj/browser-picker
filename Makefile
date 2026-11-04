@@ -62,6 +62,18 @@ STAMP         := $(BUILD)/.app-built
 
 build: $(STAMP)
 
+# The signing settings are part of what gets built, but they are not files,
+# so make cannot see them change. They are compared with the last build's when
+# the Makefile is read -- before make looks at any timestamps, which macOS's
+# make 3.81 caches and compares to the whole second -- and a difference drops
+# the build stamp. So creating a signing identity (or passing a different
+# SIGN_IDENTITY) rebuilds instead of keeping the old signature.
+SIGNING_STAMP := $(BUILD)/.signing
+SIGNING       := $(strip $(ARCH) $(SIGN_IDENTITY) $(CODESIGN_FLAGS))
+ifneq ($(SIGNING),$(strip $(shell cat $(SIGNING_STAMP) 2>/dev/null)))
+$(shell mkdir -p $(BUILD) && printf '%s\n' '$(SIGNING)' > $(SIGNING_STAMP) && rm -f $(STAMP))
+endif
+
 $(STAMP): $(SOURCES) $(PLIST) $(ENTITLEMENTS) Makefile
 	@# Built next to the destination and moved into place only when whole, so
 	@# a compile error leaves the previous build alone.
