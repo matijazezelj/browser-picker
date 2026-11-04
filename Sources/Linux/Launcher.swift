@@ -34,8 +34,8 @@ enum Launcher {
         do { exec = try ExecLine.parse(execText) } catch {
             throw LaunchError.launchFailed("\(id): \(error)")
         }
-        guard id != DesktopFile.id, Discovery.commandName(exec) != Discovery.ownProgram else {
-            throw LaunchError.launchFailed("Refused to hand a link to Browser Picker itself.")
+        guard id != DesktopFile.id, !Discovery.handsBack(exec) else {
+            throw LaunchError.launchFailed("Refused to hand a link back to Browser Picker (\(id) opens links with the default browser).")
         }
         return LinuxBrowser(name: entry.name ?? id, id: id, path: path, entry: entry, exec: exec)
     }

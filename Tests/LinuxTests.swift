@@ -190,6 +190,12 @@ enum LinuxTests {
                                                 "\(root)/usr/share/applications"], "dir order: \(env.applicationDirs)")
         check(env.applicationDirs.contains("/var/lib/flatpak/exports/share/applications")
               && env.applicationDirs.last == "/var/lib/snapd/desktop/applications", "flatpak and snap dirs added")
+        // Through a symlink to this binary, or a dispatcher to the default
+        // browser (us): the link would come straight back.
+        let bp = { (s: String) in ExecLine(arguments: s.split(separator: " ").map { [.text(String($0))] }) }
+        check(Discovery.handsBack(bp("/usr/local/bin/bp --open"), which: { $0 }, own: "/usr/local/bin/bp"), "own binary under another name")
+        check(!Discovery.handsBack(bp("/usr/bin/firefox"), which: { $0 }, own: "/usr/local/bin/bp"), "a browser is not us")
+        check(Discovery.handsBack(bp("gio open"), which: { _ in nil }, own: nil), "gio")
         check(LinuxEnvironment(home: "/h", vars: ["XDG_DATA_HOME": "relative"]).dataHome == "/h/.local/share", "relative XDG path ignored")
         check(LinuxEnvironment(home: "/h", vars: [:]).applicationDirs.prefix(3) == ["/h/.local/share/applications", "/usr/local/share/applications", "/usr/share/applications"], "default XDG_DATA_DIRS")
 
@@ -204,6 +210,8 @@ enum LinuxTests {
         write("\(root)/usr/share/applications/browser-picker.desktop", entry("Browser Picker", "/x/browser-picker --open %u"))
         write("\(root)/usr/share/applications/other-picker.desktop", entry("Picker Copy", "/opt/bp/browser-picker --open %u"))
         write("\(root)/usr/share/applications/broken.desktop", entry("Broken", "broken \"%u"))
+        write("\(root)/usr/share/applications/exo-web-browser.desktop", entry("Web Browser", "exo-open --launch WebBrowser %u"))
+        write("\(root)/usr/share/applications/opener.desktop", entry("Opener", "env X=1 /usr/bin/xdg-open %u"))
         write("\(root)/usr/share/applications/link.desktop", "[Desktop Entry]\nType=Link\nName=L\nURL=x\nMimeType=x-scheme-handler/https;\n")
         write("\(root)/usr/share/applications/firefox-flatpak.desktop",
               entry("Firefox", "/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=firefox --file-forwarding org.mozilla.firefox @@u %u @@",
@@ -218,7 +226,7 @@ enum LinuxTests {
         let found = Discovery.browsers(env: env, which: which)
         let ids = found.map(\.id).sorted()
         check(ids == ["firefox-flatpak.desktop", "firefox.desktop", "kde4-konq.desktop"],
-              "hidden, NoDisplay, TryExec, non-https, own, broken and Link entries skipped: \(ids)")
+              "hidden, NoDisplay, TryExec, non-https, own, dispatcher, broken and Link entries skipped: \(ids)")
         check(found.first { $0.id == "firefox.desktop" }?.name == "Firefox Local", "the winning file's name")
         check(found.first { $0.id == "firefox-flatpak.desktop" }?.name == "Firefox", "no clash with Firefox Local")
 

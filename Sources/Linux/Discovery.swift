@@ -79,6 +79,29 @@ enum Discovery {
     /// another copy of the picker would only ask again.
     static let ownProgram = "browser-picker"
 
+    /// Programs that open a link with the default browser, which is Browser
+    /// Picker: an entry that runs one (Xfce's "Web Browser" runs `exo-open
+    /// --launch WebBrowser %u`) would hand the link straight back, and a
+    /// rule naming it would start the picker again and again.
+    static let dispatchers: Set<String> = [ownProgram, "xdg-open", "exo-open", "gio", "gvfs-open", "gnome-open",
+                                           "kde-open", "kde-open5", "kde-open6", "kioclient", "kioclient5", "kioclient6"]
+
+    /// This binary, symlinks resolved.
+    static let ownExecutable: String? = {
+        let p = DefaultBrowser.executable()
+        return p.hasPrefix("/") ? URL(fileURLWithPath: p).resolvingSymlinksInPath().path : nil
+    }()
+
+    /// Whether an Exec line would give the link back to Browser Picker: it
+    /// runs one of the dispatchers, or this very binary under another name
+    /// (through a symlink; a separate copy is not caught).
+    static func handsBack(_ exec: ExecLine, which: (String) -> String? = { Spawn.which($0) },
+                          own: String? = ownExecutable) -> Bool {
+        if dispatchers.contains(commandName(exec)) { return true }
+        guard let own, let exe = which(commandPath(exec)) else { return false }
+        return URL(fileURLWithPath: exe).resolvingSymlinksInPath().path == own
+    }
+
     // MARK: Desktop entries
 
     /// Every desktop file under `dirs`, by desktop file ID, the first
@@ -119,7 +142,7 @@ enum Discovery {
               let exec = try? ExecLine.parse(execText)
         else { return nil }
         if let tryExec = entry.tryExec, !tryExec.isEmpty, which(tryExec) == nil { return nil }
-        if commandName(exec) == ownProgram { return nil }
+        if handsBack(exec, which: which) { return nil }
         return LinuxBrowser(name: name, id: id, path: path, entry: entry, exec: exec)
     }
 
