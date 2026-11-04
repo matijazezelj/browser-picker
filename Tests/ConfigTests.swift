@@ -1,12 +1,12 @@
 // Browser Picker -- config tests, and the main that runs every suite
-// (HostTests, RouterTests). No XCTest (plain swiftc, no SwiftPM): a main that
+// (HostTests, RouterTests, CoreTests). No XCTest (plain swiftc, no SwiftPM): a main that
 // runs every assertion and exits non-zero if any failed.
 //
 //   make test
 //
 // which amounts to
 //
-//   swiftc Sources/{Model,Config,Host,Router}.swift Tests/*.swift -o build/config-tests
+//   swiftc Sources/Core/*.swift Tests/*.swift -o build/config-tests
 //   build/config-tests config.example.toml
 //
 // With a path, it also parses that file and checks the example rules.
@@ -200,6 +200,7 @@ enum ConfigTests {
 
         HostTests.run()
         RouterTests.run()
+        CoreTests.run()
 
         if testFailures > 0 {
             print("\(testFailures) failed")
