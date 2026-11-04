@@ -5,8 +5,8 @@
 //
 // Anything that fails opens the link in the fallback browser and says why in
 // a notification: a broken picker costs the choice, never the link. The
-// routing and that fallback chain are in Router.swift, host parsing in
-// Host.swift; this file wires them to the system.
+// routing and that fallback chain are in Core/Router.swift, host parsing in
+// Core/Host.swift; this file wires them to the system.
 //
 // Run from a shell it is a CLI instead (no UI): --list, --check URL, --version.
 
@@ -79,7 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             loadConfig: { try Config.load() },
             targets: { Discovery.targets(config: $0) },
             browsers: { Discovery.browsers() },
-            safariApp: { NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Safari") },
+            lastResortApp: { NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Safari") },
             ownBundleID: Bundle.main.bundleIdentifier ?? Paths.bundleID,
             lastPick: { [defaults, lastKey] in defaults.string(forKey: lastKey) },
             rememberPick: { [defaults, lastKey] in defaults.set($0, forKey: lastKey) },
@@ -113,24 +113,8 @@ func cli(_ args: [String]) -> Int32 {
 
     case "--list":
         guard let config = loadConfig() else { return 1 }
-        let targets = Discovery.targets(config: config)
-        let w = max(targets.map { $0.title.count }.max() ?? 0, 5)
-        let rw = max(targets.map { reference(of: $0).count }.max() ?? 0, 9)
-        print("Targets (\(Paths.config.path)):")
-        print("  " + "TITLE".padding(toLength: w, withPad: " ", startingAt: 0)
-              + "  " + "REFERENCE".padding(toLength: rw, withPad: " ", startingAt: 0) + "  KIND")
-        for t in targets {
-            print("  " + t.title.padding(toLength: w, withPad: " ", startingAt: 0)
-                  + "  " + reference(of: t).padding(toLength: rw, withPad: " ", startingAt: 0)
-                  + "  \(t.kind)")
-        }
-        print("\nRules (first match wins):")
-        if config.rules.isEmpty { print("  (none)") }
-        for r in config.rules {
-            let found = targets.contains { $0.matches(reference: r.open) } ? "" : "   (no such target: picker)"
-            print("  \(r.hosts.joined(separator: " | "))  ->  \(r.open)\(found)")
-        }
-        for w in config.patternWarnings { print("warning: \(w)") }
+        print(Report.list(config: config, targets: Discovery.targets(config: config),
+                          configPath: Paths.config.path))
         return 0
 
     case "--check":
@@ -139,27 +123,9 @@ func cli(_ args: [String]) -> Int32 {
             return 2
         }
         guard let config = loadConfig() else { return 1 }
-        // The same check the app makes on every link, before any rule.
-        guard let url = webURL(args[1]) else {
-            print("host:   (none)")
-            print("opens:  nothing: rejected, not an http(s) link with a valid host")
-            return 3
-        }
-        let host = hostOf(url)
-        print("host:   \(host ?? "(none)")")
-        switch route(host: host, config: config, targets: Discovery.targets(config: config)) {
-        case .rule(let r, let t):
-            print("rule:   \(r.hosts.joined(separator: " | ")) -> \(r.open)")
-            print("opens:  \(t.title)")
-        case .missing(let r):
-            print("rule:   \(r.hosts.joined(separator: " | ")) -> \(r.open) (no such target)")
-            print("opens:  picker")
-        case .picker:
-            print("rule:   none")
-            print("opens:  picker")
-        }
-        for w in config.patternWarnings { print("warning: \(w)") }
-        return 0
+        let (output, status) = Report.check(args[1], config: config, targets: Discovery.targets(config: config))
+        print(output)
+        return status
 
     case "--set-default":
         return setDefaultBrowser()

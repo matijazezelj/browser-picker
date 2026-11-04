@@ -199,7 +199,7 @@ enum Discovery {
         // the app (Floorp -> "Floorp"). Use it only if profiles.ini is there.
         let ini = appURL.appendingPathComponent("Contents/Resources/application.ini")
         if let text = try? String(contentsOf: ini, encoding: .utf8) {
-            let app = parseINI(text).first { $0.section == "App" }?.values ?? [:]
+            let app = Profiles.parseINI(text).first { $0.section == "App" }?.values ?? [:]
             let candidates = [app["Profile"], app["Name"],
                               app["Vendor"].flatMap { v in app["Name"].map { "\(v)/\($0)" } }]
             for case let c? in candidates where !c.isEmpty {
@@ -212,71 +212,15 @@ enum Discovery {
         return .plain(hasPrivate: false)
     }
 
-    // MARK: Chromium profiles
+    // MARK: Profiles
+    //
+    // The readers themselves are platform-neutral, in Core/Profiles.swift.
 
-    /// Profiles from "Local State": profile.info_cache maps the directory
-    /// ("Default", "Profile 1") to its settings, "name" among them. JSON
-    /// objects have no order, so profile.profiles_order is used when present
-    /// (it is the order of Chrome's own profile menu), else directory order
-    /// with Default first.
     static func chromiumProfiles(userDataDir: URL) -> [(directory: String, name: String)] {
-        guard let data = try? Data(contentsOf: userDataDir.appendingPathComponent("Local State")),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let profile = root["profile"] as? [String: Any],
-              let cache = profile["info_cache"] as? [String: Any]
-        else { return [] }
-        var dirs = Array(cache.keys).sorted { a, b in
-            if (a == "Default") != (b == "Default") { return a == "Default" }
-            return a.localizedStandardCompare(b) == .orderedAscending
-        }
-        if let order = profile["profiles_order"] as? [String] {
-            dirs = order.filter { cache[$0] != nil } + dirs.filter { !order.contains($0) }
-        }
-        return dirs.map { dir in
-            let name = ((cache[dir] as? [String: Any])?["name"] as? String)
-                .flatMap { $0.isEmpty ? nil : $0 } ?? dir
-            return (dir, name)
-        }
+        Profiles.chromium(userDataDir: userDataDir)
     }
 
-    // MARK: Firefox profiles
-
-    /// Names from the [Profile*] sections of profiles.ini, in file order with
-    /// the Default=1 profile first. Install sections ([Install...]) name the
-    /// profile each installed copy uses, which is not a choice to offer.
-    static func firefoxProfiles(root: URL) -> [String] {
-        guard let text = try? String(contentsOf: root.appendingPathComponent("profiles.ini"),
-                                     encoding: .utf8)
-        else { return [] }
-        var names: [String] = []
-        var defaultName: String?
-        for s in parseINI(text) where s.section.hasPrefix("Profile") {
-            guard let name = s.values["Name"], !name.isEmpty, !names.contains(name) else { continue }
-            names.append(name)
-            if s.values["Default"] == "1" { defaultName = name }
-        }
-        if let d = defaultName, let i = names.firstIndex(of: d) {
-            names.insert(names.remove(at: i), at: 0)
-        }
-        return names
-    }
-
-    /// A plain INI reader: [section] headers and key=value lines, in order.
-    static func parseINI(_ text: String) -> [(section: String, values: [String: String])] {
-        var sections: [(section: String, values: [String: String])] = []
-        for raw in text.split(whereSeparator: \.isNewline) {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            if line.isEmpty || line.hasPrefix(";") || line.hasPrefix("#") { continue }
-            if line.hasPrefix("["), line.hasSuffix("]") {
-                sections.append((String(line.dropFirst().dropLast()), [:]))
-            } else if let eq = line.firstIndex(of: "="), !sections.isEmpty {
-                let k = line[..<eq].trimmingCharacters(in: .whitespaces)
-                let v = line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)
-                sections[sections.count - 1].values[k] = v
-            }
-        }
-        return sections
-    }
+    static func firefoxProfiles(root: URL) -> [String] { Profiles.firefox(root: root) }
 
     // MARK: Safari profiles
 

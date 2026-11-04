@@ -37,7 +37,7 @@ enum Route: Equatable {
 /// A link with no host (not http/https, or malformed) matches no rule.
 func route(host: String?, config: Config, targets: [Target]) -> Route {
     guard let host, let rule = config.rule(forHost: host) else { return .picker }
-    if let target = targets.first(where: { $0.matches(reference: rule.open) }) { return .rule(rule, target) }
+    if let target = targets.first(matchingAny: rule.open) { return .rule(rule, target) }
     return .missing(rule)
 }
 
@@ -51,7 +51,9 @@ struct Router {
     var loadConfig: () throws -> Config
     var targets: (Config) -> [Target]
     var browsers: () -> [Browser]
-    var safariApp: () -> URL?
+    /// The browser to open plainly when everything else failed: Safari on
+    /// macOS. nil when there is none (Linux has no browser it can count on).
+    var lastResortApp: () -> URL?
     /// This app's bundle ID; nothing with it is ever launched.
     var ownBundleID: String?
     var lastPick: () -> String?
@@ -194,7 +196,7 @@ struct Router {
 
         if !plainOnly {
             let targets = (known ?? self.targets(config)).filter { !isOwn($0.bundleID) && !tried.contains($0) }
-            if let t = targets.first(where: { $0.matches(reference: config.fallback) }) {
+            if let t = targets.first(matchingAny: config.fallback) {
                 do {
                     try launch(url, t)
                     return done(.fallback(t), in: t.title)
@@ -209,13 +211,17 @@ struct Router {
         // open, so if one of those failed its app is not tried again.
         let failedApps = tried.filter { $0.kind == .plain || $0.kind == .safariDefault }
             .map { $0.appURL.standardizedFileURL }
-        let browser = config.fallback.split(separator: ":").first.map {
-            $0.trimmingCharacters(in: .whitespaces).lowercased()
-        } ?? ""
-        var apps = browsers()
-            .filter { !isOwn($0.bundleID) && ($0.name.lowercased() == browser || $0.bundleID.lowercased() == browser) }
-            .map(\.appURL)
-        if let safari = safariApp() { apps.append(safari) }
+        // The browser part of each fallback reference, in order.
+        let installed = browsers().filter { !isOwn($0.bundleID) }
+        var apps: [URL] = config.fallback.flatMap { ref -> [URL] in
+            let browser = ref.split(separator: ":").first.map {
+                $0.trimmingCharacters(in: .whitespaces).lowercased()
+            } ?? ""
+            return installed
+                .filter { $0.name.lowercased() == browser || $0.bundleID.lowercased() == browser }
+                .map(\.appURL)
+        }
+        if let last = lastResortApp() { apps.append(last) }
         var seen: [URL] = failedApps
         for app in apps {
             let key = app.standardizedFileURL

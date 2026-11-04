@@ -164,7 +164,7 @@ enum HostTests {
         expectRule("https://xn--bcher-kva.example/", "IDN-Unicode")
         expectRule("https://münchen.example/", "IDN-Puny")
         expectRule("https://XN--MNCHEN-3YA.example/", "IDN-Puny")
-        check(c.rule(forHost: "Bücher.Example.")?.open == "IDN-Unicode", "rule(forHost:) canonicalises a raw host")
+        check(c.rule(forHost: "Bücher.Example.")?.openDescription == "IDN-Unicode", "rule(forHost:) canonicalises a raw host")
 
         // Case, trailing dots and ports, on both sides.
         expectRule("https://EXAMPLE.com./", "Example")
@@ -219,7 +219,7 @@ extension Route {
     /// The rule's `open`, whether or not the target exists; nil for the picker.
     var ruleOpen: String? {
         switch self {
-        case .rule(let r, _), .missing(let r): return r.open
+        case .rule(let r, _), .missing(let r): return r.openDescription
         case .picker: return nil
         }
     }

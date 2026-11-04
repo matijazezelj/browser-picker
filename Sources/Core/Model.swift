@@ -1,13 +1,34 @@
 // Browser Picker -- shared types. This file is the contract between the parts
 // of the app; change it only together with every file that uses it.
 //
-//   Config.swift     loads ~/.config/browser-picker/config.toml
-//   Discovery.swift  finds installed browsers and their profiles
-//   Launcher.swift   opens a URL in a Target
-//   Picker.swift     the menu under the mouse cursor
-//   main.swift       URL events, rules, --list / --check CLI
+// One project, two front ends. Sources/Core is platform-neutral (Foundation
+// only) and is built into both the macOS app and the Linux binary, and into
+// the tests on both systems:
+//
+//   Core/Model.swift     these types
+//   Core/Config.swift    loads ~/.config/browser-picker/config.toml
+//   Core/Host.swift      the canonical host of a link; isWebURL / webURL
+//   Core/Router.swift    rules, picker, fallback chain; LaunchArguments
+//   Core/Profiles.swift  Chromium "Local State" and Firefox profiles.ini
+//   Core/Report.swift    the text of --list and --check
+//
+// Sources/macOS: main (URL events, CLI), Discovery (LaunchServices, Safari),
+// Launcher, Picker (the menu under the cursor).
+// Sources/Linux: the Linux front end (.desktop handler, dmenu-style picker).
+//
+// What a Target's fields mean on each system:
+//
+//                 macOS                        Linux
+//   bundleID      CFBundleIdentifier           desktop file ID
+//                 ("com.google.Chrome")        ("brave-browser.desktop")
+//   appURL        the .app bundle              the .desktop file
+//                 (file:///Applications/       (file:///usr/share/applications/
+//                  Google Chrome.app)           brave-browser.desktop)
+//
+// Config references match a target by browserName or by bundleID, so on
+// Linux "brave-browser.desktop" works as a reference as well as "Brave".
 
-import AppKit
+import Foundation
 
 /// How a target opens a link. Each case carries what the launcher needs.
 enum TargetKind: Equatable {
@@ -66,12 +87,33 @@ struct Target: Equatable {
     }
 }
 
+extension Array where Element == Target {
+    /// The target for a list of references: the first reference that matches
+    /// any target wins, so ["Safari:Work", "Google Chrome:Work"] picks Safari
+    /// on a Mac and Chrome where there is no Safari. One config can then
+    /// serve several machines and both systems.
+    func first(matchingAny references: [String]) -> Target? {
+        for ref in references {
+            if let t = first(where: { $0.matches(reference: ref) }) { return t }
+        }
+        return nil
+    }
+}
+
 /// A rule from config: hosts (sh-style globs on the bare host, lowercased,
-/// e.g. "*.slack.com", "*example*") that open in `open`, a Target
-/// reference as described in `Target.matches(reference:)`.
+/// e.g. "*.slack.com", "*example*") that open in `open`: Target references
+/// as described in `Target.matches(reference:)`, tried in order, the first
+/// that exists on this machine winning. A single string in the file is a
+/// one-element list.
 struct Rule: Equatable {
     let hosts: [String]
-    let open: String
+    let open: [String]
+
+    /// `open` as the config would write it: "Safari:Work", or
+    /// ["Safari:Work", "Google Chrome:Work"].
+    var openDescription: String {
+        open.count == 1 ? open[0] : "[" + open.map { "\"\($0)\"" }.joined(separator: ", ") + "]"
+    }
 }
 
 struct Config: Equatable {
@@ -86,10 +128,17 @@ struct Config: Equatable {
     var showPrivate: Bool = true
     /// Preselect the target picked last time.
     var rememberLast: Bool = true
-    /// Where the menu opens: "cursor" (default) or "center".
+    /// Where the menu opens: "cursor" (default) or "center". macOS only;
+    /// a Linux menu program places itself.
     var position: String = "cursor"
-    /// Opened when the picker cannot run at all (bad config, no targets).
-    var fallback: String = "Safari"
+    /// Linux only: the menu program as an argv array, run without a shell.
+    /// It speaks the dmenu protocol (entries on stdin, one per line; the
+    /// chosen line on stdout; a non-zero exit or no output cancels). Empty
+    /// means auto-detect. The macOS app ignores it.
+    var pickerCommand: [String] = []
+    /// Opened when the picker cannot run at all (bad config, no targets) or
+    /// a launch fails: references tried in order like a rule's `open`.
+    var fallback: [String] = ["Safari"]
 }
 
 enum ConfigError: Error, CustomStringConvertible {
@@ -106,8 +155,9 @@ enum ConfigError: Error, CustomStringConvertible {
 /// Paths shared by every part of the app.
 enum Paths {
     static var config: URL {
+        // The XDG spec says a relative (or empty) value is to be ignored.
         let base = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"]
-            .map { URL(fileURLWithPath: $0) }
+            .flatMap { $0.hasPrefix("/") ? URL(fileURLWithPath: $0) : nil }
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config")
         return base.appendingPathComponent("browser-picker/config.toml")
     }
@@ -135,15 +185,20 @@ enum Paths {
 //       static func parse(_ text: String) throws -> Config
 //       func rule(forHost host: String) -> Rule?      // first match, globs via fnmatch
 //   }
-//   enum Discovery {
+//   enum Discovery {                       // per front end
 //       static func browsers() -> [(name: String, bundleID: String, appURL: URL)]
 //       static func targets(config: Config) -> [Target]  // include/exclude/order/private applied
 //   }
-//   enum Launcher {
+//   enum Launcher {                        // per front end
 //       static func open(_ url: URL, in target: Target) throws
 //   }
-//   enum Picker {
+//   enum Picker {                          // per front end
 //       /// Shows the menu at the cursor; returns nil when cancelled.
 //       static func choose(for url: URL, targets: [Target], preselect: Target?) -> Target?
 //   }
 //   func hostOf(_ url: URL) -> String?  // canonical host of an http(s) link, else nil (Host.swift)
+//   enum Profiles {                       // Core/Profiles.swift
+//       static func chromium(userDataDir: URL) -> [(directory: String, name: String)]
+//       static func firefox(root: URL) -> [String]
+//       static func parseINI(_ text: String) -> [(section: String, values: [String: String])]
+//   }
