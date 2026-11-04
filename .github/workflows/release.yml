@@ -49,6 +49,17 @@ jobs:
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
 
+      # Every release has a CHANGELOG.md section, and that section is what the
+      # release page shows. Checked before the build so a forgotten entry
+      # fails in seconds, not after notarization.
+      - name: Check the changelog
+        run: |
+          if ! scripts/changelog-section.sh "$VERSION" > "$RUNNER_TEMP/changes.md"; then
+            echo "::error::CHANGELOG.md has no entries under ## [$VERSION]; move them out of [Unreleased] before tagging"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/changes.md"
+
       - name: Toolchain
         run: swiftc --version
 
@@ -192,6 +203,16 @@ jobs:
           notes="$RUNNER_TEMP/notes.md"
           echo "Browser Picker $VERSION for Apple Silicon Macs (macOS 14 or later)." > "$notes"
           echo >> "$notes"
+          # The "Check the changelog" step wrote this version's CHANGELOG.md
+          # section. Its "### Added" style headings sit under this "##".
+          {
+            echo "## What's changed"
+            echo
+            cat "$RUNNER_TEMP/changes.md"
+            echo
+            echo "## Install"
+            echo
+          } >> "$notes"
           if [ "$DEVELOPER_ID" = true ]; then
             cat >> "$notes" <<NOTES
           **This build is signed with a Developer ID certificate and notarized by

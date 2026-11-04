@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Release pages show that version's section of this changelog, and the
+  release workflow refuses a tag that has none
+  (`scripts/changelog-section.sh`).
+
 ## [0.2.1] - 2026-11-04
 
 ### Fixed

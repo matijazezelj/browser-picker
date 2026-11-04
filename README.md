@@ -87,7 +87,8 @@ Other targets: `make build` (to `./build/Browser Picker.app`), `make test`,
 
 Each [release](https://github.com/matijazezelj/browser-picker/releases) has
 a zipped app for Apple silicon, built and tested by GitHub Actions, and its
-SHA-256. On Intel, build from source as above.
+SHA-256, and lists what changed in that version (its section of
+[`CHANGELOG.md`](CHANGELOG.md)). On Intel, build from source as above.
 
 Each release's notes say how it was signed. The release workflow signs with a
 Developer ID certificate and notarizes the app when the repository has the
@@ -614,7 +615,12 @@ Firefox-family browsers, non-English Safari, and keyboard use in the menu.
 - A browser that should get profiles but does not: open an issue with its
   bundle ID (`osascript -e 'id of app "Name"'`) and where it keeps its
   profiles.
-- Note changes in [`CHANGELOG.md`](CHANGELOG.md).
+- Note changes in [`CHANGELOG.md`](CHANGELOG.md) under `## [Unreleased]`.
+  To release, rename that heading to `## [X.Y.Z] - YYYY-MM-DD`, add a new
+  empty `## [Unreleased]` above it, set `CFBundleShortVersionString` in
+  `Resources/Info.plist` to `X.Y.Z`, and push the tag `vX.Y.Z`. The release
+  workflow refuses a tag without a changelog section and shows that section
+  on the release page (`scripts/changelog-section.sh X.Y.Z` prints it).
 
 ## Maintainers: notarized releases
 
