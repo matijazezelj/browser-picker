@@ -35,7 +35,10 @@ enum State {
 
     static func remember(_ title: String) {
         let u = url()
-        try? FileManager.default.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // 0700: which browser and profile was picked last is nobody else's
+        // business, even with a world-readable home.
+        try? FileManager.default.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
         try? Data((title + "\n").utf8).write(to: u, options: .atomic)
     }
 }
