@@ -257,7 +257,10 @@ struct Router {
             let key = app.standardizedFileURL
             guard !seen.contains(key) else { continue }
             seen.append(key)
-            let name = app.deletingPathExtension().lastPathComponent
+            // The browser's own name ("Brave Origin"), not the bundle or
+            // desktop file name ("brave-origin"), which is all a URL gives.
+            let name = installed.first { $0.appURL.standardizedFileURL == key }?.name
+                ?? app.deletingPathExtension().lastPathComponent
             do {
                 try launchPlain(url, app)
                 return done(.fallbackApp(app), in: name)

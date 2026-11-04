@@ -55,6 +55,12 @@ All notable changes to this project are documented here. The format follows
   copy. Unpacking over it merged the two versions' files, which breaks the
   code signature, and the running old copy kept handling links.
 
+### Fixed
+
+- The "opened … instead" notification named a plain-opened fallback by its
+  file (`brave-origin`, the desktop file ID) instead of the browser's name
+  ("Brave Origin"). Found testing on a Fedora desktop.
+
 ## [0.2.2] - 2026-11-04
 
 ### Added

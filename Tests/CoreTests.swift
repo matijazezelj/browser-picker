@@ -194,7 +194,8 @@ enum CoreTests {
             check(f.open() == .fallbackApp(RouterTests.safariApp), "empty fallback -> last resort")
         }
         do {
-            // A .desktop app URL names the plain-open app by its file ID.
+            // A .desktop app URL is launched by its file; the notification names
+            // the browser ("Firefox"), not the file ID ("firefox").
             let f = F()
             let desktop = URL(fileURLWithPath: "/usr/share/applications/firefox.desktop")
             let ff = Target(browserName: "Firefox", bundleID: "firefox.desktop", appURL: desktop,
@@ -206,6 +207,8 @@ enum CoreTests {
             f.config = RouterTests.config("[picker]\nfallback = \"firefox.desktop\"\n")
             check(f.open() == .fallbackApp(desktop), "a failed profile target falls back to its app, opened plainly")
             check(f.launched == [ff.title, "app:firefox"], "by desktop file ID: \(f.launched)")
+            check(f.notes.last?.subtitle?.hasSuffix(" in Firefox instead") == true,
+                  "notification names the browser, not the file: \(f.notes)")
         }
     }
 
