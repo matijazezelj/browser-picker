@@ -6,8 +6,31 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Linux: one project, two front ends. The sources are split into
+  `Sources/Core` (config, host parsing, rules, router, browser arguments,
+  profile readers, the `--list` / `--check` text; Foundation only) and
+  `Sources/macOS` (the app), with the Linux front end in `Sources/Linux`. The
+  shared tests run on macOS and on x86_64 and arm64 Linux in CI.
+- A rule's `open`, and `fallback`, take a list of references as well as one:
+  `open = ["Safari:Work", "Google Chrome:Work"]` opens the first that exists
+  on this machine, so one config serves several machines and both systems.
+  `--list` shows which entry a list resolves to.
+- `[picker] command`, the Linux menu program as an argument list (run without
+  a shell, dmenu protocol). The macOS app ignores it.
+- Releases also carry `browser-picker-<version>-linux-x86_64.tar.gz` and
+  `-linux-aarch64.tar.gz`, each with a `.sha256`.
+
 ### Changed
 
+- `fallback = ""` (or `[]`) still means no fallback target, while an empty
+  name inside a list, or an empty `open`, is an error with its line number.
+- Chromium profiles without a `profiles_order` are sorted numerically
+  (`Profile 2` before `Profile 10`) the same way on every system, rather than
+  by the Finder's locale-aware order.
+- `$XDG_CONFIG_HOME` is used only when it is an absolute path, as the XDG
+  spec says; otherwise the config is in `~/.config`.
 - README: upgrading from a release starts by quitting and removing the old
   copy. Unpacking over it merged the two versions' files, which breaks the
   code signature, and the running old copy kept handling links.

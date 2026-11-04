@@ -1,7 +1,8 @@
 # Browser Picker -- example configuration.
 #
 # Copy this file to ~/.config/browser-picker/config.toml (or
-# $XDG_CONFIG_HOME/browser-picker/config.toml) and edit it. It is read on
+# $XDG_CONFIG_HOME/browser-picker/config.toml) and edit it, or run
+# browser-picker --init-config. The same file works on macOS and Linux. It is read on
 # every link, so an edit applies to the next click; no restart needed.
 #
 # Every key is optional: a missing file, or a missing key, means the default
@@ -18,13 +19,19 @@
 #   Rules and `fallback` name a target as "Browser:Profile", e.g.
 #   "Safari:Work" or "Google Chrome:Home"; "Safari:Private" is a private
 #   window. Case and spaces around the colon do not matter, and the browser
-#   may be given by bundle ID ("com.brave.Browser:Work"). A reference with no
-#   profile ("Firefox") means that browser's first entry.
+#   may be given by its ID: the bundle ID on macOS ("com.brave.Browser:Work"),
+#   the desktop file ID on Linux ("brave-browser.desktop:Work"). A reference
+#   with no profile ("Firefox") means that browser's first entry.
+#   `open` and `fallback` also take a list, tried in order, the first that
+#   exists on this machine winning:
+#     open = ["Safari:Work", "Google Chrome:Work"]
+#   so one file can serve a Mac and a Linux machine.
 #   The browser and profile names are the ones the picker shows; run
-#     "$HOME/Applications/Browser Picker.app/Contents/MacOS/BrowserPicker" --list
-#   to print every target on this Mac exactly as it can be written here.
+#     browser-picker --list
+#   (on macOS: "$HOME/Applications/Browser Picker.app/Contents/MacOS/BrowserPicker" --list)
+#   to print every target on this machine exactly as it can be written here.
 #
-# Option-click
+# Option-click (macOS)
 #   Holding Option while the link opens skips the rules and always shows the
 #   picker.
 
@@ -34,11 +41,18 @@ remember_last = true
 # Add a "<Browser>: Private" entry for each browser that has private windows.
 show_private = true
 # Where the menu appears: "cursor" (under the mouse) or "center" (of the
-# screen the mouse is on).
+# screen the mouse is on). macOS only: on Linux the menu program places
+# itself (Wayland has no global cursor position).
 position = "cursor"
-# A reference, used when the picker cannot run at all (bad config, no
-# browsers found) or opening the chosen target fails.
+# A reference, or a list of them, used when the picker cannot run at all
+# (bad config, no browsers found) or opening the chosen target fails.
+# For both systems: fallback = ["Safari", "Firefox"]
 fallback = "Safari"
+# Linux only: the menu program, as a list of arguments, run directly (never
+# through a shell). It gets one entry per line on stdin and prints the chosen
+# line; a non-zero exit or no output cancels (the dmenu protocol). Unset, the
+# first of fuzzel, wofi, rofi, bemenu and tofi that is installed is used.
+# command = ["fuzzel", "--dmenu", "--prompt", "Open in: "]
 
 [browsers]
 # Browsers to show, in this order, by name or bundle ID; any browser not
@@ -57,20 +71,22 @@ exclude = []
 #   "*.slack.com"    any subdomain of slack.com, but NOT slack.com itself;
 #                    list both to cover both
 #   "?" and "[abc]"  one character, one of a set
-# A rule naming a target this Mac does not have shows the picker instead, so
-# one file can be shared between Macs.
+# A rule naming a target this machine does not have shows the picker
+# instead, so one file can be shared between machines; with a list, the
+# first target that exists is used.
 #
 # The rules below are examples: rename the profiles to the ones --list
 # prints, or delete them.
 
-# Work: the company's own domain and its chat tool.
+# Work: the company's own domain and its chat tool. Safari's Work profile on
+# a Mac, Chrome's on a machine without Safari.
 [[rule]]
 hosts = ["example.com", "*.example.com"]
-open = "Safari:Work"
+open = ["Safari:Work", "Google Chrome:Work"]
 
 [[rule]]
 hosts = ["slack.com", "*.slack.com"]
-open = "Safari:Work"
+open = ["Safari:Work", "Google Chrome:Work"]
 
 # Home: everything under example.org.
 [[rule]]

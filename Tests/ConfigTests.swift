@@ -179,11 +179,11 @@ enum ConfigTests {
                 let c = try Config.load(from: url)
                 check(c.include.isEmpty && c.exclude.isEmpty, "example shows every browser")
                 let want: [(String, String?)] = [
-                    ("example.com", "Safari:Work"),
-                    ("www.example.com", "Safari:Work"),
-                    ("a.b.example.com", "Safari:Work"),
-                    ("slack.com", "Safari:Work"),
-                    ("acme.slack.com", "Safari:Work"),
+                    ("example.com", #"["Safari:Work", "Google Chrome:Work"]"#),
+                    ("www.example.com", #"["Safari:Work", "Google Chrome:Work"]"#),
+                    ("a.b.example.com", #"["Safari:Work", "Google Chrome:Work"]"#),
+                    ("slack.com", #"["Safari:Work", "Google Chrome:Work"]"#),
+                    ("acme.slack.com", #"["Safari:Work", "Google Chrome:Work"]"#),
                     ("example.org", "Safari:Home"),
                     ("docs.example.org", "Safari:Home"),
                     ("notexample.com", nil),

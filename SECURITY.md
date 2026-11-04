@@ -107,7 +107,7 @@ Where a link may still show up outside the app:
 
 Accessibility is the powerful one: an app that has it can read and click
 any app's UI. Browser Picker uses it only against Safari's File menu
-(`Sources/Discovery.swift`, `Sources/Launcher.swift`), and only when you use
+(`Sources/macOS/Discovery.swift`, `Sources/macOS/Launcher.swift`), and only when you use
 Safari profiles. Without it everything except opening a *new* Safari
 profile or private window still works, so you can leave it off if you don't
 use Safari profiles. Chromium, Firefox and plain browsers need no
@@ -143,12 +143,23 @@ when:
    `NSURLConnection`, `CFSocket*`, `socket`, `connect`, `getaddrinfo`, …),
    or the dynamic lookups that could reach those without naming them
    (`dlopen`, `dlsym`, `NSClassFromString`, `objc_getClass`);
-3. the sources name a helper tool other than `/usr/bin/open` and
-   `/usr/bin/osascript`, contain AppleScript that runs a shell
+3. the app's sources (`Sources/Core`, `Sources/macOS`) name a helper tool
+   other than `/usr/bin/open` and `/usr/bin/osascript`; any source contains AppleScript that runs a shell
    (`do shell script`) or opens a URL itself, or contain a URL literal
    whose host is not one of the names reserved for examples (`example.com`,
    `.org`, `.net`, and the `.example`, `.test`, `.invalid` and `.localhost`
    domains).
+
+The Linux binary gets the checks that mean something there (the "No
+network code" step of the `linux` job). It fails when the binary loads any
+shared library beyond the C runtime (libc, libm, libpthread, ld-linux, …;
+the Swift runtime and Foundation are linked in statically), when it refers
+to libcurl or FoundationNetworking, or when `Sources/Core` or
+`Sources/Linux` import FoundationNetworking or Network or call
+`URLSession`, `socket`, `connect`, `getaddrinfo` and the like. A symbol
+check of the binary itself proves less than on macOS: the statically linked
+Foundation carries its own resolver calls (its `Host` type), so those
+symbols are listed in the log for a reader rather than failing the run.
 
 What it cannot prove:
 

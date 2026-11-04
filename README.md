@@ -16,6 +16,26 @@ Browser Picker first:
 
 It is written in Swift with no dependencies and builds with plain `swiftc`.
 
+## One project, two front ends
+
+Browser Picker runs on **macOS** (this app) and on **Linux** (a single
+binary that is registered as the `x-scheme-handler/http(s)` handler through
+a `.desktop` file; see [Linux](#linux)). Both are built from one source tree:
+
+| | |
+|---|---|
+| `Sources/Core` | shared, Foundation only: the config, host parsing, rules, the router and its fallback chain, browser command-line arguments, the Chromium and Firefox profile readers, and the `--list` / `--check` output |
+| `Sources/macOS` | the app: Apple events, LaunchServices discovery, Safari profiles, the cursor menu |
+| `Sources/Linux` | desktop-entry discovery, launching without a shell, a dmenu-style menu (fuzzel, wofi, rofi, bemenu, tofi or your own) |
+
+The shared code is tested on both systems in CI, and **the config file is the
+same on both**: one `config.toml` can serve a Mac and a Linux machine, with
+`open = ["Safari:Work", "Google Chrome:Work"]` picking whichever exists (see
+[References](#references-browserprofile)). The command-line flags
+(`--list`, `--check`, `--init-config`, `--set-default`, `--version`,
+`--help`) behave the same on both; the Linux binary adds `--open URL`, which
+its desktop file uses. The macOS-only parts are marked as such below.
+
 ## Features
 
 - **Rules**: host globs such as `*.example.com` map to a target such as
@@ -216,8 +236,9 @@ link, so no restart is needed.
 [picker]
 remember_last = true      # preselect the last pick
 show_private = true       # a "<Browser>: Private" entry per browser that has one
-position = "cursor"       # or "center"
+position = "cursor"       # or "center" (macOS)
 fallback = "Safari"       # when the picker cannot run, or opening fails
+# command = ["fuzzel", "--dmenu"]   # Linux: the menu program, argv, no shell
 
 [browsers]
 include = []              # names or bundle IDs, in menu order; empty = all
@@ -227,9 +248,9 @@ exclude = []              # names or bundle IDs to hide
 hosts = ["example.com", "*.example.com"]
 open = "Safari:Work"
 
-[[rule]]
+[[rule]]                  # a list: the first target that exists wins
 hosts = ["slack.com", "*.slack.com"]
-open = "Google Chrome:Work"
+open = ["Safari:Work", "Google Chrome:Work"]
 ```
 
 ### Keys
@@ -238,12 +259,13 @@ open = "Google Chrome:Work"
 |---|---|---|---|---|
 | `[picker]` | `remember_last` | bool | `true` | Preselect the entry picked last time. |
 | `[picker]` | `show_private` | bool | `true` | Add a `<Browser>: Private` entry for each browser with private windows. |
-| `[picker]` | `position` | `"cursor"` \| `"center"` | `"cursor"` | Open the menu under the mouse, or centred on the screen the mouse is on. |
-| `[picker]` | `fallback` | reference | `"Safari"` | Where links go when the picker cannot run (bad config, no browsers) or the chosen target fails to open. |
+| `[picker]` | `position` | `"cursor"` \| `"center"` | `"cursor"` | macOS: open the menu under the mouse, or centred on the screen the mouse is on. Ignored on Linux, where the menu program places itself (Wayland gives no global cursor position). |
+| `[picker]` | `fallback` | reference or list | `"Safari"` | Where links go when the picker cannot run (bad config, no browsers) or the chosen target fails to open. A list is tried in order. `""` or `[]`: no fallback target. |
+| `[picker]` | `command` | array of strings | unset | Linux: the menu program and its arguments, run directly, never through a shell. It must speak the dmenu protocol: entries on stdin, one per line; the chosen line on stdout; a non-zero exit or empty output cancels. Unset: the first installed of `fuzzel --dmenu`, `wofi --dmenu`, `rofi -dmenu`, `bemenu`, `tofi`. Ignored on macOS. |
 | `[browsers]` | `include` | array of strings | `[]` | Browsers to show, in this order, by name or bundle ID. Browsers not listed are hidden. Names that match nothing installed are skipped. Empty means every browser: Safari first, then the rest alphabetically. |
 | `[browsers]` | `exclude` | array of strings | `[]` | Browsers never to show, by name or bundle ID. |
 | `[[rule]]` | `hosts` | array of strings | (required) | Host globs; see below. |
-| `[[rule]]` | `open` | reference | (required) | The target matching links open in. |
+| `[[rule]]` | `open` | reference or list | (required) | The target matching links open in. With a list, the first reference that exists on this machine. |
 
 Unknown tables and keys, duplicate keys and values of the wrong type are
 **errors with a line number**, never silently ignored, so a typo cannot
@@ -331,14 +353,28 @@ between browser and profile:
 | `"Safari:Work"` | the Safari profile named Work |
 | `"Google Chrome:Home"` | the Chrome profile Chrome shows as Home (its name, not its `Profile 1` folder) |
 | `"Safari:Private"` | a new Safari private window (likewise `"Firefox:Private"`, …) |
-| `"com.brave.Browser:Work"` | the browser given by bundle ID instead of name |
+| `"com.brave.Browser:Work"` | the browser given by its ID instead of its name: the bundle ID on macOS |
+| `"brave-browser.desktop:Work"` | on Linux, the ID is the desktop file ID, `.desktop` included |
 | `"Firefox"` | a browser alone: its first entry |
 
 Case and spaces around the colon do not matter (`"safari : work"` works).
 
-A rule that names a target this Mac does not have (a profile that does not
-exist, a browser that is not installed) shows the menu instead of failing, so
-one config can be shared between Macs.
+`open` and `fallback` also take a **list** of references, tried in order;
+the first that names a target on this machine wins:
+
+```toml
+[[rule]]
+hosts = ["*.example.com"]
+open = ["Safari:Work", "Google Chrome:Work", "brave-browser.desktop:Work"]
+```
+
+On a Mac with Safari's Work profile that is Safari; on a Linux machine, Chrome
+or Brave, whichever is installed. A list may not be empty and may not hold an
+empty name. `--list` shows which entry each list resolves to here.
+
+A rule that names a target this machine does not have (a profile that does
+not exist, a browser that is not installed; with a list, none of them) shows
+the menu instead of failing, so one config can be shared between machines.
 
 ### Testing the config: `--list` and `--check`
 
@@ -617,17 +653,21 @@ starts it again.
 
 | File | Does |
 |---|---|
-| `Sources/Model.swift` | shared types: `Target`, `Rule`, `Config`, paths and the bundle ID |
-| `Sources/Config.swift` | the TOML-subset parser and host matching |
-| `Sources/Discovery.swift` | finds browsers (LaunchServices) and their profiles |
-| `Sources/Launcher.swift` | opens a URL in a target, per browser family |
-| `Sources/Picker.swift` | the menu: a borderless, non-activating `NSPanel` |
-| `Sources/Host.swift` | the canonical host of a link and of a rule pattern (punycode, userinfo, ports) |
-| `Sources/Router.swift` | routing and the fallback chain, with the system passed in as closures |
-| `Sources/main.swift` | URL events, wiring the router to the system, and the CLI |
+| `Sources/Core/Model.swift` | shared types: `Target`, `Rule`, `Config`, paths and the bundle ID; what a target's fields mean on each system |
+| `Sources/Core/Config.swift` | the TOML-subset parser and host matching |
+| `Sources/Core/Host.swift` | the canonical host of a link and of a rule pattern (punycode, userinfo, ports) |
+| `Sources/Core/Router.swift` | routing and the fallback chain, with the system passed in as closures; browser arguments (`LaunchArguments`) |
+| `Sources/Core/Profiles.swift` | Chromium `Local State` and Firefox `profiles.ini` readers, given a directory |
+| `Sources/Core/Report.swift` | the text of `--list` and `--check` |
+| `Sources/macOS/Discovery.swift` | finds browsers (LaunchServices), where they keep profiles, Safari profiles |
+| `Sources/macOS/Launcher.swift` | opens a URL in a target, per browser family |
+| `Sources/macOS/Picker.swift` | the menu: a borderless, non-activating `NSPanel` |
+| `Sources/macOS/main.swift` | URL events, wiring the router to the system, and the CLI |
+| `Sources/Linux/` | the Linux front end; see [Linux](#linux) |
 | `Tests/ConfigTests.swift` | config parser tests, and the `main` that runs every suite |
 | `Tests/HostTests.swift` | host extraction and matching: IDNs, userinfo tricks, IP literals, malformed links, wildcard boundaries |
 | `Tests/RouterTests.swift` | every routing and failure path, with a fake launcher |
+| `Tests/CoreTests.swift` | reference lists, `picker.command`, the profile readers and the `--list` / `--check` text |
 | `scripts/create-signing-identity.sh` | creates the local self-signed signing identity |
 | `Resources/BrowserPicker.entitlements` | the Apple Events entitlement for hardened-runtime builds |
 
@@ -649,11 +689,16 @@ Firefox-family browsers, non-English Safari, and keyboard use in the menu.
 - `make test` runs the config, host-matching and routing tests (no XCTest
   needed; it is a plain executable that exits non-zero on failure). The
   routing tests drive `Router` with a fake launcher, so a new failure path
-  gets a test without a browser. It also checks that the bundle
-  ID in `Resources/Info.plist` and `Sources/Model.swift` agree.
+  gets a test without a browser. On macOS it also checks that the bundle
+  ID in `Resources/Info.plist` and `Sources/Core/Model.swift` agree. The
+  same shared tests run on Linux (`make test` there too), and
+  `Sources/Core` must build with Foundation alone:
+  `swiftc -typecheck Sources/Core/*.swift`.
 - `make build` and run the CLI against a scratch config:
   `XDG_CONFIG_HOME=/tmp/bp-test build/Browser\ Picker.app/Contents/MacOS/BrowserPicker --list`.
-- CI runs the same `make build` and `make test` on every pull request, then
+- CI runs the shared tests on x86_64 and arm64 Linux (in the official Swift
+  image, pinned by digest) and builds the Linux binary there. On macOS it
+  runs the same `make build` and `make test` on every pull request, then
   checks the bundle (arm64, `plutil -lint`, `codesign --verify`) and runs
   `--version`, `--list` and `--check` against `config.example.toml`. It
   also fails on network code (see [SECURITY.md](SECURITY.md#what-ci-checks)):
