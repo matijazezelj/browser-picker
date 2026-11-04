@@ -37,7 +37,7 @@ enum Route: Equatable {
 /// A link with no host (not http/https, or malformed) matches no rule.
 func route(host: String?, config: Config, targets: [Target]) -> Route {
     guard let host, let rule = config.rule(forHost: host) else { return .picker }
-    if let target = targets.first(where: { $0.matches(reference: rule.open) }) { return .rule(rule, target) }
+    if let target = targets.first(matchingAny: rule.open) { return .rule(rule, target) }
     return .missing(rule)
 }
 
@@ -51,7 +51,9 @@ struct Router {
     var loadConfig: () throws -> Config
     var targets: (Config) -> [Target]
     var browsers: () -> [Browser]
-    var safariApp: () -> URL?
+    /// The browser to open plainly when everything else failed: Safari on
+    /// macOS. nil when there is none (Linux has no browser it can count on).
+    var lastResortApp: () -> URL?
     /// This app's bundle ID; nothing with it is ever launched.
     var ownBundleID: String?
     var lastPick: () -> String?
@@ -71,7 +73,7 @@ struct Router {
         case opened(Target)
         /// The config's `fallback` target.
         case fallback(Target)
-        /// A plain open with the fallback browser, or Safari.
+        /// A plain open with a fallback browser, or the last-resort app.
         case fallbackApp(URL)
         /// The menu was cancelled: dropped on purpose, nothing said.
         case cancelled
@@ -108,15 +110,31 @@ struct Router {
         return .rejected
     }
 
-    /// The text of a GetURL Apple event: checked before anything else.
-    func openLink(_ text: String, forcePicker: Bool) -> Outcome {
+    /// The text of a GetURL Apple event, or of `--open`: checked before
+    /// anything else.
+    ///
+    /// `target` (from `--target REF`) names where the link goes, as a list
+    /// of references like a rule's `open`: the first that exists is opened,
+    /// skipping the rules and the menu. When none exists, a notification
+    /// says so and the menu is shown, so the link never goes somewhere
+    /// else silently.
+    func openLink(_ text: String, forcePicker: Bool, target: [String]? = nil) -> Outcome {
         guard let url = webURL(text) else { return reject() }
-        return open(url, forcePicker: forcePicker)
+        return open(url, forcePicker: forcePicker, target: target)
+    }
+
+    /// The notification for a `--target` that names nothing on this
+    /// machine. The references were typed by the local user, not taken from
+    /// the link; of the link only the host is shown.
+    static func noSuchTargetMessage(_ references: [String]) -> String {
+        let r = references.count == 1 ? references[0]
+            : "[" + references.map { "\"\($0)\"" }.joined(separator: ", ") + "]"
+        return "No such target: \(r)"
     }
 
     /// An http(s) link. Anything else is rejected here as well, so no caller
     /// can get past the check.
-    func open(_ url: URL, forcePicker: Bool) -> Outcome {
+    func open(_ url: URL, forcePicker: Bool, target references: [String]? = nil) -> Outcome {
         guard isWebURL(url) else { return reject() }
         let config: Config
         do {
@@ -127,6 +145,16 @@ struct Router {
         let targets = self.targets(config).filter { !isOwn($0.bundleID) }
         if targets.isEmpty {
             return openFallback(url, config: config, targets: targets, reason: "No browsers found to choose from.")
+        }
+
+        var forcePicker = forcePicker
+        if let references {
+            if let t = targets.first(matchingAny: references) {
+                // Asked for by name: not a pick, so not remembered.
+                return launchChosen(url, t, config: config, targets: targets)
+            }
+            notify(Router.noSuchTargetMessage(references), "Choose a browser for \(Router.label(url))")
+            forcePicker = true
         }
 
         let chosen: Target
@@ -146,7 +174,10 @@ struct Router {
             if picked.kind != .privateWindow { rememberPick(picked.title) }
             chosen = picked
         }
+        return launchChosen(url, chosen, config: config, targets: targets)
+    }
 
+    private func launchChosen(_ url: URL, _ chosen: Target, config: Config, targets: [Target]) -> Outcome {
         do {
             try launch(url, chosen)
             return .opened(chosen)
@@ -159,9 +190,10 @@ struct Router {
     /// What macOS hands the default browser through application(_:open:):
     /// documents (.html, .webarchive) from the Finder, a file URL. A file has
     /// no host to route by, and a file URL must never reach a browser's
-    /// command line, so it is opened only plainly, through NSWorkspace with
-    /// the file URL: the fallback browser, then Safari. An http(s) URL that
-    /// arrives this way is routed like a link; anything else is rejected.
+    /// command line, so it is opened only plainly (launchPlain) with the
+    /// file URL: the fallback browsers, then the last-resort app. An http(s)
+    /// URL that arrives this way is routed like a link; anything else is
+    /// rejected.
     func openFile(_ url: URL) -> Outcome {
         if url.isFileURL {
             return openFallback(url, config: (try? loadConfig()) ?? Config(), reason: nil, plainOnly: true)
@@ -170,9 +202,9 @@ struct Router {
     }
 
     /// The fallback target from config; then the fallback browser opened
-    /// plainly (without a profile); then Safari; then a notification. Never
-    /// NSWorkspace.open(url) alone: that would hand the link straight back to
-    /// this app, the default browser.
+    /// plainly (without a profile); then the last-resort app (Safari on
+    /// macOS); then a notification. Never "open with the default browser":
+    /// that would hand the link straight back to this app.
     ///
     /// `failed` is the target that already failed. It is not retried, so when
     /// it is the fallback too, the plain open is next. `quiet` says the first
@@ -194,7 +226,7 @@ struct Router {
 
         if !plainOnly {
             let targets = (known ?? self.targets(config)).filter { !isOwn($0.bundleID) && !tried.contains($0) }
-            if let t = targets.first(where: { $0.matches(reference: config.fallback) }) {
+            if let t = targets.first(matchingAny: config.fallback) {
                 do {
                     try launch(url, t)
                     return done(.fallback(t), in: t.title)
@@ -209,19 +241,26 @@ struct Router {
         // open, so if one of those failed its app is not tried again.
         let failedApps = tried.filter { $0.kind == .plain || $0.kind == .safariDefault }
             .map { $0.appURL.standardizedFileURL }
-        let browser = config.fallback.split(separator: ":").first.map {
-            $0.trimmingCharacters(in: .whitespaces).lowercased()
-        } ?? ""
-        var apps = browsers()
-            .filter { !isOwn($0.bundleID) && ($0.name.lowercased() == browser || $0.bundleID.lowercased() == browser) }
-            .map(\.appURL)
-        if let safari = safariApp() { apps.append(safari) }
+        // The browser part of each fallback reference, in order.
+        let installed = browsers().filter { !isOwn($0.bundleID) }
+        var apps: [URL] = config.fallback.flatMap { ref -> [URL] in
+            let browser = ref.split(separator: ":").first.map {
+                $0.trimmingCharacters(in: .whitespaces).lowercased()
+            } ?? ""
+            return installed
+                .filter { $0.name.lowercased() == browser || $0.bundleID.lowercased() == browser }
+                .map(\.appURL)
+        }
+        if let last = lastResortApp() { apps.append(last) }
         var seen: [URL] = failedApps
         for app in apps {
             let key = app.standardizedFileURL
             guard !seen.contains(key) else { continue }
             seen.append(key)
-            let name = app.deletingPathExtension().lastPathComponent
+            // The browser's own name ("Brave Origin"), not the bundle or
+            // desktop file name ("brave-origin"), which is all a URL gives.
+            let name = installed.first { $0.appURL.standardizedFileURL == key }?.name
+                ?? app.deletingPathExtension().lastPathComponent
             do {
                 try launchPlain(url, app)
                 return done(.fallbackApp(app), in: name)

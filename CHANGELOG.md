@@ -6,11 +6,60 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-04
+
+### Added
+
+- Linux: one project, two front ends. The sources are split into
+  `Sources/Core` (config, host parsing, rules, router, browser arguments,
+  profile readers, the `--list` / `--check` text; Foundation only) and
+  `Sources/macOS` (the app), with the Linux front end in `Sources/Linux`. The
+  shared tests run on macOS and on x86_64 and arm64 Linux in CI.
+- A rule's `open`, and `fallback`, take a list of references as well as one:
+  `open = ["Safari:Work", "Google Chrome:Work"]` opens the first that exists
+  on this machine, so one config serves several machines and both systems.
+  `--list` shows which entry a list resolves to.
+- `[picker] command`, the Linux menu program as an argument list (run without
+  a shell, dmenu protocol). The macOS app ignores it.
+- Releases also carry `browser-picker-<version>-linux-x86_64.tar.gz` and
+  `-linux-aarch64.tar.gz`, each with a `.sha256`.
+- `browser-picker --target REF --open URL` (Linux) opens a link in the given
+  target, or the first that exists of a list (`--target '["Safari:Work",
+  "Firefox"]'`), skipping the rules and the menu. A reference that names
+  nothing here is reported in a notification (host only) and the menu opens.
+  The macOS app takes links only as Apple events and has no `--open`.
+- `[picker] command`: exit status 127 means the menu is unavailable, and the
+  auto-detected menus are tried next; any other non-zero status still
+  cancels.
+- Linux: `[picker] command` gets the link's host in `BROWSER_PICKER_HOST`
+  and the preselected row (0-based) in `BROWSER_PICKER_SELECTED`, through its
+  environment, never its argv.
+- Linux: a `[picker] command` that cannot be started counts as exit status
+  127 (menu unavailable).
+- Linux: a desktop entry that only hands links on (`xdg-open`, `exo-open`,
+  `gio`, `kde-open`, …) or that runs Browser Picker itself, also through a
+  symlink, is never offered or used as a browser, so a link cannot loop back.
+- Linux: a menu program that exits without reading its input no longer
+  loses the link (a broken pipe is handled, not fatal).
+
 ### Changed
 
+- `fallback = ""` (or `[]`) still means no fallback target, while an empty
+  name inside a list, or an empty `open`, is an error with its line number.
+- Chromium profiles without a `profiles_order` are sorted numerically
+  (`Profile 2` before `Profile 10`) the same way on every system, rather than
+  by the Finder's locale-aware order.
+- `$XDG_CONFIG_HOME` is used only when it is an absolute path, as the XDG
+  spec says; otherwise the config is in `~/.config`.
 - README: upgrading from a release starts by quitting and removing the old
   copy. Unpacking over it merged the two versions' files, which breaks the
   code signature, and the running old copy kept handling links.
+
+### Fixed
+
+- The "opened … instead" notification named a plain-opened fallback by its
+  file (`brave-origin`, the desktop file ID) instead of the browser's name
+  ("Brave Origin"). Found testing on a Fedora desktop.
 
 ## [0.2.2] - 2026-11-04
 

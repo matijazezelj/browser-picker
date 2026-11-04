@@ -1,12 +1,12 @@
 // Browser Picker -- config tests, and the main that runs every suite
-// (HostTests, RouterTests). No XCTest (plain swiftc, no SwiftPM): a main that
+// (HostTests, RouterTests, CoreTests). No XCTest (plain swiftc, no SwiftPM): a main that
 // runs every assertion and exits non-zero if any failed.
 //
 //   make test
 //
 // which amounts to
 //
-//   swiftc Sources/{Model,Config,Host,Router}.swift Tests/*.swift -o build/config-tests
+//   swiftc Sources/Core/*.swift Tests/*.swift -o build/config-tests
 //   build/config-tests config.example.toml
 //
 // With a path, it also parses that file and checks the example rules.
@@ -76,17 +76,17 @@ enum ConfigTests {
         check(full.rememberLast == false, "remember_last")
         check(full.showPrivate == false, "show_private")
         check(full.position == "center", "position")
-        check(full.fallback == "Brave Browser:Home", "literal string")
+        check(full.fallback == ["Brave Browser:Home"], "literal string")
         check(full.include == ["Safari", "com.brave.Browser"], "array with trailing comma")
         check(full.exclude == ["Firefox", "Arc"], "multi-line array with comments")
         check(full.rules.count == 2, "two rules")
-        check(full.rules.first == Rule(hosts: ["*example*"], open: "Safari:Work"),
+        check(full.rules.first == Rule(hosts: ["*example*"], open: ["Safari:Work"]),
               "rule hosts are lowercased, open kept as written")
         check(full.rules.last?.hosts == ["a\"b", "tab\there", "\u{e9}\u{1F600}", "c:\\literal\\n", "back\\slash"],
               "escapes in basic strings, none in literal ones")
-        check(full.rules.last?.open == "x # not a comment", "# inside a string")
+        check(full.rules.last?.openDescription == "x # not a comment", "# inside a string")
         check(parse("[picker]\r\nshow_private = true\r\n").showPrivate, "CRLF line endings")
-        check(parse("[picker]\nfallback = \"\"\n").fallback == "", "empty string")
+        check(parse("[picker]\nfallback = \"\"\n").fallback == [], "empty fallback: no fallback target")
         check(parse("[browsers]\ninclude = []\n").include == [], "empty array")
 
         // MARK: Errors carry line numbers
@@ -137,14 +137,14 @@ enum ConfigTests {
         hosts = ["*"]
         open = "Anything"
         """)
-        check(globs.rule(forHost: "wiki.example.net")?.open == "Safari:Work", "*x* in the middle")
-        check(globs.rule(forHost: "example")?.open == "Safari:Work", "*x* matches x alone")
-        check(globs.rule(forHost: "WIKI.Example.NET")?.open == "Safari:Work", "host is lowercased")
-        check(globs.rule(forHost: "acme.slack.com")?.open == "Sub", "*.slack.com matches a subdomain")
-        check(globs.rule(forHost: "a.b.slack.com")?.open == "Sub", "* crosses dots")
-        check(globs.rule(forHost: "slack.com")?.open == "Apex", "*.slack.com does not match slack.com")
-        check(globs.rule(forHost: "notslack.com")?.open == "Anything", "nor notslack.com")
-        check(globs.rule(forHost: "github.com")?.open == "Anything", "first match wins, * last")
+        check(globs.rule(forHost: "wiki.example.net")?.openDescription == "Safari:Work", "*x* in the middle")
+        check(globs.rule(forHost: "example")?.openDescription == "Safari:Work", "*x* matches x alone")
+        check(globs.rule(forHost: "WIKI.Example.NET")?.openDescription == "Safari:Work", "host is lowercased")
+        check(globs.rule(forHost: "acme.slack.com")?.openDescription == "Sub", "*.slack.com matches a subdomain")
+        check(globs.rule(forHost: "a.b.slack.com")?.openDescription == "Sub", "* crosses dots")
+        check(globs.rule(forHost: "slack.com")?.openDescription == "Apex", "*.slack.com does not match slack.com")
+        check(globs.rule(forHost: "notslack.com")?.openDescription == "Anything", "nor notslack.com")
+        check(globs.rule(forHost: "github.com")?.openDescription == "Anything", "first match wins, * last")
         check(Config().rule(forHost: "example.org") == nil, "no rules, no match")
 
         // MARK: Target.matches(reference:)
@@ -179,11 +179,11 @@ enum ConfigTests {
                 let c = try Config.load(from: url)
                 check(c.include.isEmpty && c.exclude.isEmpty, "example shows every browser")
                 let want: [(String, String?)] = [
-                    ("example.com", "Safari:Work"),
-                    ("www.example.com", "Safari:Work"),
-                    ("a.b.example.com", "Safari:Work"),
-                    ("slack.com", "Safari:Work"),
-                    ("acme.slack.com", "Safari:Work"),
+                    ("example.com", #"["Safari:Work", "Google Chrome:Work"]"#),
+                    ("www.example.com", #"["Safari:Work", "Google Chrome:Work"]"#),
+                    ("a.b.example.com", #"["Safari:Work", "Google Chrome:Work"]"#),
+                    ("slack.com", #"["Safari:Work", "Google Chrome:Work"]"#),
+                    ("acme.slack.com", #"["Safari:Work", "Google Chrome:Work"]"#),
                     ("example.org", "Safari:Home"),
                     ("docs.example.org", "Safari:Home"),
                     ("notexample.com", nil),
@@ -191,7 +191,7 @@ enum ConfigTests {
                     ("github.com", nil),
                 ]
                 for (host, open) in want {
-                    check(c.rule(forHost: host)?.open == open, "example config: \(host) -> \(open ?? "picker")")
+                    check(c.rule(forHost: host)?.openDescription == open, "example config: \(host) -> \(open ?? "picker")")
                 }
             } catch {
                 check(false, "example config: \(error)")
@@ -200,6 +200,7 @@ enum ConfigTests {
 
         HostTests.run()
         RouterTests.run()
+        CoreTests.run()
 
         if testFailures > 0 {
             print("\(testFailures) failed")

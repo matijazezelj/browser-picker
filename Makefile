@@ -1,7 +1,15 @@
 # Browser Picker -- build, test and install.
 #
+# One project, two front ends: Sources/Core is shared, Sources/macOS is the
+# app, Sources/Linux the Linux binary. On Linux this file includes
+# Makefile.linux, which has that system's build and install targets; what
+# follows the "macOS" marker below applies on macOS only.
+#
+#   make test           run the shared tests (Config, Host, Router) -- on
+#                       both systems
+#
+# macOS:
 #   make                build ./build/Browser Picker.app
-#   make test           run the config tests
 #   make install        copy the app to $(PREFIX) (default ~/Applications)
 #   make set-default    ask macOS to make the installed app the default browser
 #   make uninstall      remove the installed app and its permission grants
@@ -28,9 +36,45 @@
 # Contents/Resources), and resets the grants only when the designated
 # requirement changed, so that macOS asks again rather than refusing silently.
 
+BUILD         := build
+SWIFTC        ?= swiftc
+UNAME         := $(shell uname -s)
+EXAMPLE_CONFIG := config.example.toml
+
+# The shared core and its tests. Tests/Linux* belong to the Linux front end
+# (Makefile.linux) and need its sources.
+CORE_SOURCES  := $(sort $(wildcard Sources/Core/*.swift))
+TEST_SOURCES  := $(sort $(filter-out Tests/Linux%,$(wildcard Tests/*.swift)))
+
+.DEFAULT_GOAL := build
+.PHONY: build test test-core clean
+
+test: test-core
+
+test-core: $(BUILD)/config-tests
+	$(BUILD)/config-tests $(EXAMPLE_CONFIG)
+
+$(BUILD)/config-tests: $(CORE_SOURCES) $(TEST_SOURCES)
+	mkdir -p $(BUILD)
+	$(SWIFTC) -o $@ $^
+
+clean:
+	rm -rf $(BUILD)
+
+ifneq ($(UNAME),Darwin)
+# Makefile.linux defines build and install for Linux. It may add its own
+# tests as prerequisites of test (test: test-linux), not a second recipe.
+ifneq ($(wildcard Makefile.linux),)
+include Makefile.linux
+else
+build:
+	@echo "no Makefile.linux: only make test (the shared core) works on $(UNAME)"; exit 1
+endif
+else
+# ---------------------------------------------------------------- macOS
+
 APP_NAME      := Browser Picker
 EXECUTABLE    := BrowserPicker
-BUILD         := build
 APP           := $(BUILD)/$(APP_NAME).app
 PREFIX        ?= $(HOME)/Applications
 DEST          := $(PREFIX)/$(APP_NAME).app
@@ -44,14 +88,12 @@ SIGN_IDENTITY := $(shell security find-identity -v -p codesigning 2>/dev/null \
 endif
 CODESIGN_FLAGS ?=
 ENTITLEMENTS  := Resources/BrowserPicker.entitlements
-SWIFTC        ?= swiftc
 # Keep in step with LSMinimumSystemVersion in Resources/Info.plist: an API
 # newer than this is then a compile error rather than a crash at run time.
 MIN_MACOS     := 14.0
 
-SOURCES       := $(sort $(wildcard Sources/*.swift))
+SOURCES       := $(CORE_SOURCES) $(sort $(wildcard Sources/macOS/*.swift))
 PLIST         := Resources/Info.plist
-EXAMPLE_CONFIG := config.example.toml
 BUNDLE_ID     := $(shell /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' $(PLIST))
 LSREGISTER    := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
@@ -59,7 +101,7 @@ LSREGISTER    := /System/Library/Frameworks/CoreServices.framework/Frameworks/La
 # stamp stands in for the bundle.
 STAMP         := $(BUILD)/.app-built
 
-.PHONY: build test install uninstall set-default clean
+.PHONY: install uninstall set-default bundle-id
 
 build: $(STAMP)
 
@@ -108,14 +150,11 @@ $(STAMP): $(SOURCES) $(PLIST) $(ENTITLEMENTS) $(EXAMPLE_CONFIG) Makefile
 	  echo "  Run scripts/create-signing-identity.sh once to keep them across rebuilds."; \
 	fi
 
-test: $(BUILD)/config-tests
-	@grep -q 'static let bundleID = "$(BUNDLE_ID)"' Sources/Model.swift || { \
-	  echo "Paths.bundleID in Sources/Model.swift differs from $(BUNDLE_ID) in $(PLIST)"; exit 1; }
-	$(BUILD)/config-tests config.example.toml
+test: bundle-id
 
-$(BUILD)/config-tests: Sources/Model.swift Sources/Config.swift Sources/Host.swift Sources/Router.swift $(sort $(wildcard Tests/*.swift))
-	mkdir -p $(BUILD)
-	$(SWIFTC) -o $@ $^
+bundle-id:
+	@grep -q 'static let bundleID = "$(BUNDLE_ID)"' Sources/Core/Model.swift || { \
+	  echo "Paths.bundleID in Sources/Core/Model.swift differs from $(BUNDLE_ID) in $(PLIST)"; exit 1; }
 
 # The grants are reset only when the designated requirement changes. codesign
 # prints it on stderr: "designated => ..." for a certificate signature, and
@@ -162,5 +201,4 @@ uninstall:
 	@echo "removed $(DEST). Your config in ~/.config/browser-picker is left alone;"
 	@echo "pick another default browser in System Settings > Desktop & Dock."
 
-clean:
-	rm -rf $(BUILD)
+endif

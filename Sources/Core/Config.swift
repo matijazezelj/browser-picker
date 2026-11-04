@@ -12,6 +12,9 @@ import Foundation
 extension Config {
     /// A missing file is not an error: no config means the defaults.
     static func load(from url: URL = Paths.config) throws -> Config {
+        // Checked first as well as caught below: the error a missing file
+        // throws is not the same type in every Foundation.
+        guard FileManager.default.fileExists(atPath: url.path) else { return Config() }
         let text: String
         do {
             text = try String(contentsOf: url, encoding: .utf8)
@@ -29,7 +32,7 @@ extension Config {
         var table = ""             // "" is the root, before any header
         var seenTables: Set<String> = []
         var ruleHosts: [String]?   // the [[rule]] being filled
-        var ruleOpen: String?
+        var ruleOpen: [String]?
         var ruleLine = 0
         var keys: Set<String> = []   // keys set in the current table
 
@@ -38,7 +41,7 @@ extension Config {
             guard let hosts = ruleHosts, !hosts.isEmpty else {
                 throw ConfigError.syntax(line: ruleLine, message: "[[rule]] needs hosts = [\"...\"]")
             }
-            guard let open = ruleOpen, !open.trimmingCharacters(in: .whitespaces).isEmpty else {
+            guard let open = ruleOpen else {
                 throw ConfigError.syntax(line: ruleLine, message: "[[rule]] needs open = \"Browser:Profile\"")
             }
             config.rules.append(Rule(hosts: hosts.map { $0.lowercased() }, open: open))
@@ -77,6 +80,27 @@ extension Config {
                     guard case .array(let a) = value else { throw fail("\(key) must be an array of strings") }
                     return a
                 }
+                /// A target reference or a list of them, first existing wins.
+                /// A blank name inside a list is an error. A rule's `open`
+                /// must name something; `fallback = ""` (or []) has always
+                /// meant no fallback target.
+                func references(allowNone: Bool = false) throws -> [String] {
+                    switch value {
+                    case .string(let s):
+                        if s.trimmingCharacters(in: .whitespaces).isEmpty {
+                            guard allowNone else { throw fail("\(key) must name a target") }
+                            return []
+                        }
+                        return [s]
+                    case .array(let a):
+                        guard !a.isEmpty || allowNone else { throw fail("\(key) must name at least one target") }
+                        guard a.allSatisfy({ !$0.trimmingCharacters(in: .whitespaces).isEmpty }) else {
+                            throw fail("\(key) must not hold an empty name")
+                        }
+                        return a
+                    case .bool: throw fail("\(key) must be a string or an array of strings")
+                    }
+                }
                 if !table.isEmpty, !keys.insert(key).inserted { throw fail("duplicate key \(key)") }
                 switch (table, key) {
                 case ("picker", "remember_last"): config.rememberLast = try bool()
@@ -87,11 +111,19 @@ extension Config {
                         throw fail("position must be \"cursor\" or \"center\"")
                     }
                     config.position = p
-                case ("picker", "fallback"): config.fallback = try string()
+                case ("picker", "fallback"): config.fallback = try references(allowNone: true)
+                case ("picker", "command"):
+                    // An argv array, never a shell line: the first element is
+                    // the program, run as it is (found on PATH).
+                    let argv = try strings()
+                    guard let prog = argv.first, !prog.isEmpty else {
+                        throw fail("command must start with the program, e.g. [\"fuzzel\", \"--dmenu\"]")
+                    }
+                    config.pickerCommand = argv
                 case ("browsers", "include"): config.include = try strings()
                 case ("browsers", "exclude"): config.exclude = try strings()
                 case ("rule", "hosts"): ruleHosts = try strings()
-                case ("rule", "open"): ruleOpen = try string()
+                case ("rule", "open"): ruleOpen = try references()
                 case ("", _):
                     throw fail("key \(key) outside a table; put it under [picker] or [browsers]")
                 default:
@@ -102,6 +134,35 @@ extension Config {
         }
         try finishRule()
         return config
+    }
+
+    /// A target reference or list of them as given on a command line
+    /// (`--target REF`), in the syntax of a rule's `open`:
+    ///   Google Chrome:Work                 one reference, no quotes needed
+    ///   "Safari:Work"                      a quoted TOML string
+    ///   ["Safari:Work", "Google Chrome"]   a TOML array of strings
+    /// Errors (an empty reference, an empty list, bad syntax) are
+    /// ConfigError.invalid, with no line number.
+    static func references(_ text: String) throws -> [String] {
+        let t = text.trimmingCharacters(in: .whitespaces)
+        // One line: the text is put into a [[rule]] below, and must not be
+        // able to add keys or tables of its own.
+        guard !t.contains(where: \.isNewline) else {
+            throw ConfigError.invalid("--target must be one line")
+        }
+        guard let first = t.unicodeScalars.first, first == "[" || first == "\"" || first == "'" else {
+            guard !t.isEmpty else {
+                throw ConfigError.invalid("--target needs a reference such as \"Firefox\" or \"Google Chrome:Work\"")
+            }
+            return [t]
+        }
+        // The same parser and checks as `open` in a [[rule]].
+        do {
+            let c = try parse("[[rule]]\nhosts = [\"*\"]\nopen = \(t)\n")
+            return c.rules[0].open
+        } catch ConfigError.syntax(_, let message) {
+            throw ConfigError.invalid("--target: \(message.replacingOccurrences(of: "open ", with: "the target "))")
+        }
     }
 
     /// First rule with a glob matching the host. Globs are fnmatch(3)

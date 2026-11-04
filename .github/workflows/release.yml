@@ -1,5 +1,8 @@
 # Publish a GitHub Release when a v* tag is pushed: build and test on Apple
-# Silicon, sign, zip the app with ditto, and attach the zip and its SHA-256.
+# Silicon, sign, zip the app with ditto, and attach the zip and its SHA-256;
+# build the Linux binary on x86_64 and arm64 Linux (statically linked Swift
+# runtime) and attach each as browser-picker-<ver>-linux-<arch>.tar.gz with
+# its SHA-256. Nothing is published unless every job succeeded.
 #
 #   git tag v1.2.0 && git push origin v1.2.0
 #
@@ -24,8 +27,88 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  linux:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    # The same image, pinned by the same digest, as ci.yml (see there why).
+    container:
+      image: swift:6.4.2-noble@sha256:bca121f6eb59fd80340d1296887b2698ed8f3eb9eca7d80c181f8af769dc7ee0
+    env:
+      BIN: build/browser-picker
+      TAG: ${{ github.ref_name }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the tag against Info.plist
+        run: |
+          version=$(sed -n '/<key>CFBundleShortVersionString<\/key>/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}' Resources/Info.plist)
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::tag $TAG does not match CFBundleShortVersionString $version in Resources/Info.plist"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          [ "$(uname -m)" = "$ARCH" ] || { echo "::error::expected $ARCH, running on $(uname -m)"; exit 1; }
+
+      - name: Toolchain
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends make >/dev/null
+          swiftc --version
+
+      - name: Build and test
+        run: |
+          make build
+          make test
+          needed=$(readelf -d "$BIN" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' | sort -u)
+          echo "NEEDED:"; echo "$needed" | awk '{print "  " $0}'
+          bad=$(echo "$needed" | grep -vE '^(libc|libm|libdl|libpthread|librt|libutil|libgcc_s|libstdc\+\+|ld-linux[^ ]*)\.so' || true)
+          [ -z "$bad" ] || { echo "::error::links a library that is not part of the C runtime: $(echo "$bad" | tr "\n" " ")"; exit 1; }
+          got=$("$BIN" --version)
+          [ "$got" = "browser-picker $VERSION" ] || { echo "::error::--version printed '$got'"; exit 1; }
+
+      - name: Package
+        run: |
+          name="browser-picker-$VERSION-linux-$ARCH"
+          mkdir -p "dist/$name"
+          cp "$BIN" config.example.toml README.md LICENSE CHANGELOG.md "dist/$name/"
+          # The desktop file and anything else the Linux install needs, and
+          # Makefile.linux so `make -f Makefile.linux install` works from the
+          # unpacked tarball.
+          if [ -d Resources/linux ]; then cp -R Resources/linux/. "dist/$name/"; fi
+          if [ -f Makefile.linux ]; then cp Makefile.linux "dist/$name/"; fi
+          # Same bytes for the same commit: sorted names, no owner, the
+          # commit's time.
+          epoch=$(git -c safe.directory="$PWD" log -1 --format=%ct 2>/dev/null || date +%s)
+          (cd dist && tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$epoch" \
+             -czf "$name.tar.gz" "$name" && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256" && \
+             cat "$name.tar.gz.sha256" && tar -tzvf "$name.tar.gz")
+          rm -rf "dist/$name"
+
+      - name: Keep for the release job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 3
+
   release:
     name: Build and publish
+    needs: linux
     runs-on: macos-26
     timeout-minutes: 45
     permissions:
@@ -196,12 +279,29 @@ jobs:
           ditto -c -k --keepParent "$APP" "dist/$zip"
           (cd dist && shasum -a 256 "$zip" > "$zip.sha256" && cat "$zip.sha256")
 
+      - name: Collect the Linux builds
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: linux-*
+          path: dist
+          merge-multiple: true
+
+      - name: Check the Linux builds
+        run: |
+          cd dist
+          for arch in x86_64 aarch64; do
+            f="browser-picker-$VERSION-linux-$arch.tar.gz"
+            [ -f "$f" ] && [ -f "$f.sha256" ] || { echo "::error::missing $f or its checksum"; exit 1; }
+            shasum -a 256 -c "$f.sha256"
+          done
+          ls -l
+
       - name: Write the release notes
         env:
           DEVELOPER_ID: ${{ steps.mode.outputs.developer_id }}
         run: |
           notes="$RUNNER_TEMP/notes.md"
-          echo "Browser Picker $VERSION for Apple Silicon Macs (macOS 14 or later)." > "$notes"
+          echo "Browser Picker $VERSION for Apple Silicon Macs (macOS 14 or later) and for x86_64 and arm64 Linux." > "$notes"
           echo >> "$notes"
           # The "Check the changelog" step wrote this version's CHANGELOG.md
           # section. Its "### Added" style headings sit under this "##".
@@ -244,6 +344,20 @@ jobs:
           \`\`\`sh
           shasum -a 256 -c Browser-Picker-$VERSION-arm64.zip.sha256
           \`\`\`
+
+          ### Linux
+
+          \`browser-picker-$VERSION-linux-x86_64.tar.gz\` and
+          \`browser-picker-$VERSION-linux-aarch64.tar.gz\` hold a single binary
+          with the Swift runtime linked in (it needs only the C library),
+          the desktop file and the example config. Check and unpack:
+
+          \`\`\`sh
+          sha256sum -c browser-picker-$VERSION-linux-\$(uname -m).tar.gz.sha256
+          tar -xzf browser-picker-$VERSION-linux-\$(uname -m).tar.gz
+          \`\`\`
+
+          then follow "Linux" in the README.
           NOTES
           cat "$notes"
 

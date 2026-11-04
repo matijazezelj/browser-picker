@@ -53,7 +53,7 @@ enum RouterTests {
                 loadConfig: { try self.config() },
                 targets: { _ in self.targets },
                 browsers: { self.browsers },
-                safariApp: { self.safari },
+                lastResortApp: { self.safari },
                 ownBundleID: Paths.bundleID,
                 lastPick: { self.last },
                 rememberPick: { self.remembered.append($0) },

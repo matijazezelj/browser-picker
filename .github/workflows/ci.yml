@@ -1,10 +1,13 @@
 # Build, test and smoke-test the app on every push to main and every pull
-# request. The zipped app is kept as a workflow artifact for a couple of weeks.
+# request: the macOS app on macOS, and the shared core (plus the Linux front
+# end, once there is one) on x86_64 and arm64 Linux. The zipped app and the
+# Linux binaries are kept as workflow artifacts for a couple of weeks.
 name: CI
 
 on:
   push:
-    branches: [main]
+    # linux: the branch the Linux front end is developed on, until it merges.
+    branches: [main, linux]
   pull_request:
   workflow_dispatch:
 
@@ -94,14 +97,16 @@ jobs:
           #    binary's string table, so these are read from Sources/.
           #    Helper tools: only these two. open(1) hands the link to a
           #    browser through LaunchServices; osascript posts notifications.
-          tools=$(grep -rhoE '"/(usr/)?s?bin/[^"]*"' Sources | tr -d '"' | sort -u)
+          #    (The macOS app's sources; the Linux job lists its own.)
+          tools=$(grep -rhoE '"/(usr/)?s?bin/[^"]*"' Sources/Core Sources/macOS | tr -d '"' | sort -u)
           echo "Tools the sources name:"; echo "$tools" | awk '{print "  " $0}'
           bad=$(echo "$tools" | grep -vxE '/usr/bin/open|/usr/bin/osascript' || true)
           [ -z "$bad" ] || err "names an unexpected tool (update SECURITY.md if it is meant): $(flat "$bad")"
           #    AppleScript that runs a shell or fetches a URL.
           bad=$(grep -rnE 'do shell script|open location|URL access' Sources || true)
           [ -z "$bad" ] || err "AppleScript runs a shell or opens a URL: $bad"
-          #    A URL literal is how an endpoint would get in. Allowed: a bare
+          #    A URL literal is how an endpoint would get in (every source
+          #    file, the Linux front end's too). Allowed: a bare
           #    scheme ("https://"), and hosts under the reserved names of
           #    RFC 2606 (example.com/org/net, .example, .test, .invalid,
           #    .localhost), which nothing can be fetched from. The host is
@@ -147,5 +152,152 @@ jobs:
           path: ${{ env.ZIP }}
           # Already a zip: upload it as is rather than zipped a second time.
           archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    # The official Swift image (Docker Hub library/swift, maintained by the
+    # Swift project), pinned by the digest of its multi-arch index, so both
+    # runners get the same toolchain and a re-pushed tag cannot change what
+    # builds the release. Chosen over a setup action: no third-party action
+    # code runs with the job's token, the toolchain matches the macOS one
+    # (6.4.2), and the digest can be checked with
+    #   docker buildx imagetools inspect swift:6.4.2-noble
+    # Bump tag and digest together; Dependabot does not update job images.
+    container:
+      image: swift:6.4.2-noble@sha256:bca121f6eb59fd80340d1296887b2698ed8f3eb9eca7d80c181f8af769dc7ee0
+    env:
+      BIN: build/browser-picker
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Toolchain
+        run: |
+          # The image has no make; it is the only package added.
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends make >/dev/null
+          swiftc --version
+          make --version | head -1
+          [ "$(uname -m)" = "${{ matrix.arch }}" ] ||
+            { echo "::error::expected ${{ matrix.arch }}, running on $(uname -m)"; exit 1; }
+
+      - name: Core compiles on its own
+        # Sources/Core must need nothing but Foundation.
+        run: swiftc -typecheck Sources/Core/*.swift
+
+      - name: Shared tests
+        # Foundation on Linux parses URLs with its own code (not
+        # CFURL/NSURL as on macOS); a difference shows up here as a failed
+        # check, and is fixed in the core rather than skipped.
+        run: make test-core
+
+      - name: Build the Linux front end
+        id: linux
+        run: |
+          if [ ! -f Makefile.linux ]; then
+            echo "no Makefile.linux yet: only the shared core is checked"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "present=true" >> "$GITHUB_OUTPUT"
+          make build
+          make test
+          file "$BIN" 2>/dev/null || true
+          ls -l "$BIN"
+
+      - name: Linked libraries
+        if: steps.linux.outputs.present == 'true'
+        # -static-stdlib: the Swift runtime and Foundation are inside the
+        # binary, so it runs on a Linux without Swift. Only the C library
+        # and its friends may be loaded at run time.
+        run: |
+          needed=$(readelf -d "$BIN" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' | sort -u)
+          echo "NEEDED:"; echo "$needed" | awk '{print "  " $0}'
+          bad=$(echo "$needed" | grep -vE '^(libc|libm|libdl|libpthread|librt|libutil|libgcc_s|libstdc\+\+|ld-linux[^ ]*)\.so' || true)
+          [ -z "$bad" ] || { echo "::error::links a library that is not part of the C runtime: $(echo "$bad" | tr "\n" " ")"; exit 1; }
+
+      - name: No network code
+        if: steps.linux.outputs.present == 'true'
+        # The Linux counterpart of the macOS check (SECURITY.md, "What CI
+        # checks"). The binary carries a statically linked Foundation, whose
+        # own code (Host, FileManager over NFS, ...) may name resolver
+        # functions, so symbols cannot prove much here. What is checked:
+        # nothing loads a networking library (above, and FoundationNetworking
+        # or libcurl below), no Linux source imports or names a networking
+        # API, and the dynamic symbols are listed for a reader.
+        run: |
+          fail=0
+          err() { echo "::error::$*"; fail=1; }
+          if strings -a "$BIN" | grep -qE 'libcurl\.so|libFoundationNetworking'; then
+            err "the binary refers to libcurl or FoundationNetworking"
+          fi
+          bad=$(grep -rnE 'import (FoundationNetworking|Network)\b|URLSession|URLRequest|\b(socket|connect|getaddrinfo|gethostbyname|sendto|recvfrom)\(' Sources/Core Sources/Linux || true)
+          [ -z "$bad" ] || err "the core or Linux sources use networking: $bad"
+          echo "Network-related dynamic symbols (from the C library, for reference):"
+          nm -D --undefined-only "$BIN" | awk '{print $NF}' \
+            | grep -E '^(socket|connect|bind|listen|accept|send|recv|getaddrinfo|gethostby|getnameinfo|res_)' \
+            | sed 's/^/  /' || echo "  (none)"
+          # Makefile.linux's own check: our code's imports (before
+          # Foundation is linked in) and the helper programs it names.
+          if grep -q '^check-no-network:' Makefile.linux; then
+            make check-no-network || fail=1
+          fi
+          [ "$fail" = 0 ] && echo "no network code found"
+          exit "$fail"
+
+      - name: CLI smoke test
+        if: steps.linux.outputs.present == 'true'
+        run: |
+          # Empty XDG dirs: no desktop files, no config from the runner.
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/xdg/config" XDG_DATA_HOME="$RUNNER_TEMP/xdg/data" \
+                 XDG_DATA_DIRS="$RUNNER_TEMP/xdg/sys" XDG_STATE_HOME="$RUNNER_TEMP/xdg/state"
+          mkdir -p "$XDG_DATA_DIRS"
+          "$BIN" --init-config
+          cmp config.example.toml "$XDG_CONFIG_HOME/browser-picker/config.toml"
+          echo "# edited" >> "$XDG_CONFIG_HOME/browser-picker/config.toml"
+          "$BIN" --init-config
+          grep -q '^# edited$' "$XDG_CONFIG_HOME/browser-picker/config.toml" ||
+            { echo "::error::--init-config overwrote an existing config"; exit 1; }
+          "$BIN" --help
+
+          version=$(sed -n '/<key>CFBundleShortVersionString<\/key>/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}' Resources/Info.plist)
+          want="browser-picker $version"
+          got=$("$BIN" --version)
+          echo "$got"
+          [ "$got" = "$want" ] || { echo "::error::--version printed '$got', expected '$want'"; exit 1; }
+
+          "$BIN" --list
+          "$BIN" --check https://github.com/matijazezelj/browser-picker
+          # Not a link: rejected (status 3), and the text is not echoed.
+          set +e
+          out=$("$BIN" --check --switch 2>&1); status=$?
+          set -e
+          echo "$out"
+          [ "$status" = 3 ] || { echo "::error::--check --switch: status $status, expected 3"; exit 1; }
+          # --open with something that is not a link opens nothing and fails.
+          if "$BIN" --open "--renderer-cmd-prefix=/tmp/x"; then
+            echo "::error::--open accepted a switch as a link"; exit 1
+          fi
+
+      - name: Upload the binary
+        if: steps.linux.outputs.present == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-picker-linux-${{ matrix.arch }}
+          path: build/browser-picker
           if-no-files-found: error
           retention-days: 14
