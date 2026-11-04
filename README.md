@@ -308,10 +308,40 @@ another program, or other options, give its full argv:
 command = ["fuzzel", "--dmenu", "--width=40", "--prompt=Browser: "]
 ```
 
-Any program that speaks the dmenu protocol works. A command you give gets no
-preselect arguments. If no menu program can be started, the link opens in
-the `fallback` target (else the first browser) and a notification says why;
-a broken menu costs the choice, never the link.
+Any program that speaks the dmenu protocol works. Browser Picker adds no
+arguments to a command you give; what it knows about the link reaches the
+program through its **environment** instead, never its command line:
+
+| Variable | Value |
+|---|---|
+| `BROWSER_PICKER_HOST` | the link's host, as the prompt and notifications show it (never the path or query) |
+| `BROWSER_PICKER_SELECTED` | the 0-based row of the last pick, to preselect; unset when there is none |
+
+The program's **exit status** decides what happens next:
+
+| Status | Means |
+|---|---|
+| `0` with an entry on stdout | open the link there |
+| `127` | "no menu here" (as a shell says for a missing command): try the auto-detected programs above instead |
+| anything else, or no output | cancel: the link is not opened |
+
+A command that cannot be started at all counts as `127`. So a wrapper can
+hand over to the usual menu whenever its own one is not running, by exiting
+with 127. If no menu program can be started, the link opens in the
+`fallback` target (else the first browser) and a notification says why; a
+broken menu costs the choice, never the link.
+
+### Opening in a given target: `--target`
+
+`browser-picker --target REF --open URL` opens the link in that target,
+skipping the rules and the menu, for scripts and wrappers (see
+[References](#references-browserprofile)). REF is a reference or a list,
+written as in `open`: `'Google Chrome:Work'` or
+`'["Brave Origin:Work", "Firefox"]'`, the first that exists winning. The
+link still has to pass the same http(s) check as any other. When REF matches
+nothing on this machine, a notification says "No such target" (with the
+host) and the menu opens, never some other browser silently. A REF that does
+not parse exits with status 2 and opens nothing.
 
 ### Browsers and profiles on Linux
 

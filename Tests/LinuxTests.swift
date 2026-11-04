@@ -22,6 +22,7 @@ enum LinuxTests {
         targetsAndLaunch()
         menu()
         ownDesktopFile()
+        openArgs()
         if testFailures > 0 {
             print("\(testFailures) Linux test(s) FAILED")
             exit(1)
@@ -345,17 +346,16 @@ enum LinuxTests {
         check(Menu.prompt(host: "-x.example") == "Open -x.example in", "the prompt never starts with -")
 
         let wayland = ["WAYLAND_DISPLAY": "wayland-0"]
-        func cmd(_ installed: Set<String>, env: [String: String], config: Config = Config()) -> [String]? {
-            try? Menu.command(config: config, host: "example.com", count: 3, preselect: nil, env: env,
-                              which: { installed.contains($0) ? "/usr/bin/" + $0 : nil })
+        func cmd(_ installed: Set<String>, env: [String: String]) -> [String]? {
+            try? Menu.autoCommand(host: "example.com", count: 3, preselect: nil, env: env,
+                                  which: { installed.contains($0) ? "/usr/bin/" + $0 : nil })
         }
         check(cmd(["rofi", "wofi"], env: wayland)?.first == "wofi", "wayland order")
         check(cmd(["fuzzel", "rofi"], env: wayland)?.first == "fuzzel", "fuzzel first")
         check(cmd(["fuzzel", "rofi"], env: [:])?.first == "rofi", "X11 skips Wayland-only programs")
         check(cmd(["fuzzel"], env: [:]) == nil, "nothing usable")
-        var c = Config()
-        c.pickerCommand = ["my-menu", "--dmenu", "; rm -rf ~"]
-        check(cmd([], env: wayland, config: c) == ["my-menu", "--dmenu", "; rm -rf ~"], "picker.command as given, no shell")
+
+        menuChoose()
 
         let ts = ["A: One", "A: Two", "B"].map { Target(browserName: $0, bundleID: "x.desktop", appURL: URL(fileURLWithPath: "/x"), kind: .plain) }
         let lines = Menu.entries(ts)
@@ -370,6 +370,94 @@ enum LinuxTests {
 
         check(Notify.argv("--evil", subtitle: nil) == ["notify-send", "--app-name=Browser Picker", "--", "Browser Picker", "--evil"],
               "notify-send: text after --")
+    }
+
+    /// Menu.choose with a fake runner: what runs, with which environment,
+    /// and what a [picker] command's exit status means.
+    static func menuChoose() {
+        let ts = ["Brave: Home", "Brave: Work", "Firefox"].map {
+            Target(browserName: $0, bundleID: "x.desktop", appURL: URL(fileURLWithPath: "/x"), kind: .plain)
+        }
+        let url = URL(string: "https://www.example.com/secret/path?token=abc")!
+        struct Call { let argv: [String]; let input: String; let env: [String: String?] }
+        var custom = Config()
+        custom.pickerCommand = ["my-menu", "--dmenu", "; rm -rf ~"]
+        let wayland = ["WAYLAND_DISPLAY": "wayland-0"]
+
+        /// Runs choose; `answers` maps argv[0] to (status, output), or nil
+        /// for "cannot be started".
+        func run(_ config: Config, preselect: Target?, installed: Set<String> = ["fuzzel"],
+                 _ answers: [String: (Int32, String)?]) -> (result: Result<Target?, Error>, calls: [Call]) {
+            var calls: [Call] = []
+            let r = Result {
+                try Menu.choose(for: url, targets: ts, preselect: preselect, config: config, env: wayland,
+                                which: { installed.contains($0) ? "/usr/bin/" + $0 : nil },
+                                run: { argv, input, env in
+                                    calls.append(Call(argv: argv, input: input, env: env))
+                                    guard let a = answers[argv[0]] ?? nil else { throw Spawn.Failed(description: "not found") }
+                                    return (a.0, a.1)
+                                })
+            }
+            return (r, calls)
+        }
+        func picked(_ r: Result<Target?, Error>) -> Target?? { try? r.get() }
+
+        // picker.command: argv as given, the context only in the environment.
+        var (r, calls) = run(custom, preselect: ts[1], ["my-menu": (0, "Firefox\n")])
+        check(picked(r) == .some(ts[2]), "custom menu's pick")
+        check(calls.count == 1 && calls[0].argv == ["my-menu", "--dmenu", "; rm -rf ~"], "custom argv unchanged")
+        check(calls.first?.env == ["BROWSER_PICKER_HOST": "www.example.com", "BROWSER_PICKER_SELECTED": "1"],
+              "context env: \(String(describing: calls.first?.env))")
+        check(calls.first?.input == "Brave: Home\nBrave: Work\nFirefox\n", "entries on stdin")
+        check(!(calls.first?.argv.joined(separator: " ").contains("example.com") ?? true), "host not in argv")
+        check(!(calls.first?.env.values.contains { $0?.contains("secret") == true || $0?.contains("token") == true } ?? true),
+              "no path or query in the environment")
+
+        // No preselect: the variable is removed, not left over from ours.
+        (r, calls) = run(custom, preselect: nil, ["my-menu": (0, "Firefox\n")])
+        check(calls.first?.env.keys.contains("BROWSER_PICKER_SELECTED") == true
+              && calls.first?.env["BROWSER_PICKER_SELECTED"] == .some(nil), "SELECTED unset without a preselect")
+
+        // Any other non-zero status: cancel, and nothing else is tried.
+        for status: Int32 in [1, 2, 126, 128, 130] {
+            (r, calls) = run(custom, preselect: nil, ["my-menu": (status, "Firefox\n"), "fuzzel": (0, "Brave: Work\n")])
+            check(picked(r) == .some(nil) && calls.count == 1, "status \(status) cancels")
+        }
+        // 127: fall through to the auto-detected backend, without the context.
+        (r, calls) = run(custom, preselect: ts[0], ["my-menu": (127, ""), "fuzzel": (0, "Brave: Work\n")])
+        check(picked(r) == .some(ts[1]), "127 falls through to fuzzel")
+        check(calls.map { $0.argv[0] } == ["my-menu", "fuzzel"] && calls.last?.env == [:], "then fuzzel: \(calls.map(\.argv))")
+        check(calls.last?.argv.contains("--select-index=0") == true, "fuzzel still preselects")
+        // Cannot be started: the same as 127.
+        (r, calls) = run(custom, preselect: nil, ["fuzzel": (0, "Firefox\n")])
+        check(picked(r) == .some(ts[2]) && calls.count == 2, "unstartable picker.command falls through")
+        // 127 and no backend installed: the no-menu error, which main turns
+        // into the fallback with a notification.
+        (r, calls) = run(custom, preselect: nil, installed: [], ["my-menu": (127, "")])
+        if case .failure(let e) = r { check(e is Menu.Unavailable, "no menu at all: \(e)") } else { check(false, "expected Unavailable") }
+        // No picker.command: straight to the backend.
+        (r, calls) = run(Config(), preselect: nil, ["fuzzel": (1, "")])
+        check(picked(r) == .some(nil) && calls.map { $0.argv[0] } == ["fuzzel"], "backend cancel")
+    }
+
+    static func openArgs() {
+        check(openArguments(["--open", "https://example.com/"])! == ("https://example.com/", nil), "--open URL")
+        check(openArguments(["--target", "Brave:Work", "--open", "https://example.com/"])! == ("https://example.com/", "Brave:Work"),
+              "--target REF --open URL")
+        check(openArguments(["--open", "https://example.com/", "--target", "Brave:Work"])! == ("https://example.com/", "Brave:Work"),
+              "--open URL --target REF")
+        // The value after --open is the link candidate whatever it says, and
+        // the value after --target the reference.
+        check(openArguments(["--open", "--target"])! == ("--target", nil), "--open takes the next argument verbatim")
+        check(openArguments(["--target", "--open", "--open", "x"])! == ("x", "--open"), "values are positional")
+        for bad in [["--open"], ["--open", "a", "b"], ["--target", "R"], ["--target", "R", "--open"],
+                    ["--target", "R", "--target", "S"], ["--open", "a", "--open", "b"], ["--open", "a", "--switch", "b"],
+                    ["--target", "R", "--open", "a", "extra"], []] {
+            check(openArguments(bad) == nil, "refused: \(bad)")
+        }
+        if let refs = try? Config.references(#"["Safari:Work", "Brave:Work"]"#) {
+            check(refs == ["Safari:Work", "Brave:Work"], "a list as --target")
+        } else { check(false, "list did not parse") }
     }
 
     static func ownDesktopFile() {

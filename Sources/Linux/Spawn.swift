@@ -102,13 +102,21 @@ enum Spawn {
     /// Runs argv, writes `input` to its stdin, returns its exit status and
     /// stdout. stderr is passed through (a menu program's complaints are
     /// worth seeing when run from a terminal). Throws when it cannot start.
-    static func capture(_ argv: [String], input: String = "") throws -> (status: Int32, output: String) {
+    /// `environment` is added to ours: a value replaces a variable, nil
+    /// removes it.
+    static func capture(_ argv: [String], input: String = "",
+                        environment: [String: String?] = [:]) throws -> (status: Int32, output: String) {
         guard let prog = argv.first, let exe = which(prog) else {
             throw Failed(description: "\(argv.first ?? "(nothing)") was not found")
         }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: exe)
         p.arguments = Array(argv.dropFirst())
+        if !environment.isEmpty {
+            var env = ProcessInfo.processInfo.environment
+            for (k, v) in environment { env[k] = v }
+            p.environment = env
+        }
         let stdin = Pipe(), stdout = Pipe()
         p.standardInput = stdin
         p.standardOutput = stdout

@@ -53,6 +53,8 @@ let router = Router(
 let usage = """
     usage: browser-picker COMMAND
       --open URL       open a link: a rule's target, or the menu (what the desktop file runs)
+      --target REF     with --open: open in that target (a reference or a list, as in `open`),
+                       skipping the rules and the menu; the menu if REF matches nothing
       --list           browsers, profiles and rules as Browser Picker sees them
       --check URL      which rule and target a link would get
       --init-config    write the example config to \(Paths.config.path) (never overwrites)
@@ -87,14 +89,20 @@ func cli(_ args: [String]) -> Int32 {
         do { return try Config.load() } catch { fail("\(error)"); return nil }
     }
     switch args.first {
-    case "--open":
-        // Exactly one argument, taken verbatim: whatever it says, it is only
-        // ever a link candidate, never another option.
-        guard args.count == 2 else {
-            fail("usage: browser-picker --open URL")
+    case "--open", "--target":
+        // --open URL, optionally with --target REF (either order). Each
+        // value is exactly the argument after its flag, taken verbatim:
+        // whatever the link text says, it is only ever a link candidate,
+        // never another option.
+        guard let (text, target) = openArguments(args) else {
+            fail("usage: browser-picker [--target REF] --open URL")
             return 2
         }
-        switch router.openLink(args[1], forcePicker: false) {
+        var references: [String]?
+        if let target {
+            do { references = try Config.references(target) } catch { fail("\(error)"); return 2 }
+        }
+        switch router.openLink(text, forcePicker: false, target: references) {
         case .opened, .fallback, .fallbackApp, .cancelled: return 0
         case .rejected: return 3
         case .failed: return 1
