@@ -29,6 +29,11 @@ All notable changes to this project are documented here. The format follows
 - `[picker] command`: exit status 127 means the menu is unavailable, and the
   auto-detected menus are tried next; any other non-zero status still
   cancels.
+- Linux: `[picker] command` gets the link's host in `BROWSER_PICKER_HOST`
+  and the preselected row (0-based) in `BROWSER_PICKER_SELECTED`, through its
+  environment, never its argv.
+- Linux: a `[picker] command` that cannot be started counts as exit status
+  127 (menu unavailable).
 
 ### Changed
 
